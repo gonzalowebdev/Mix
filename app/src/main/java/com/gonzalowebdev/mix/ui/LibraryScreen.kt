@@ -348,7 +348,7 @@ fun LibraryScreen(
                                         text = { Text(if (vm.mosaic) "Vista: cuadrícula" else "Vista: mosaico") },
                                         onClick = {
                                             topMenu = false
-                                            vm.setMosaic(!vm.mosaic)
+                                            vm.updateMosaic(!vm.mosaic)
                                         }
                                     )
                                 }

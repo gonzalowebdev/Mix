@@ -58,7 +58,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     var mosaic by mutableStateOf(prefs.mosaic)
         private set
 
-    fun setMosaic(value: Boolean) {
+    fun updateMosaic(value: Boolean) {
         mosaic = value
         prefs.mosaic = value
     }
