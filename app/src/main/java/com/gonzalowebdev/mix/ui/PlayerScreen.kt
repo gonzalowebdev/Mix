@@ -35,6 +35,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,6 +51,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
@@ -168,6 +172,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         )
     }
     var bgPlayback by remember { mutableStateOf(prefs.bgPlayback) }
+    var muted by remember { mutableStateOf(prefs.muted) }
     var sleepMinutes by remember { mutableIntStateOf(0) }
     var errors by remember { mutableIntStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
@@ -191,7 +196,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     // ---- ExoPlayer ----
     val player = remember {
         ExoPlayer.Builder(context)
-            .setAudioAttributes(AudioAttributes.DEFAULT, true)
+            .setAudioAttributes(AudioAttributes.DEFAULT, !prefs.muted)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
@@ -320,6 +325,12 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         if (currentIsVideo()) player.playWhenReady = playing
     }
     LaunchedEffect(speed) { player.setPlaybackSpeed(speed) }
+
+    // Sonido apagado por defecto: sin volumen y sin quitarle el audio a otras apps
+    LaunchedEffect(muted) {
+        player.volume = if (muted) 0f else 1f
+        player.setAudioAttributes(AudioAttributes.DEFAULT, !muted)
+    }
 
     // Temporizador de imágenes
     LaunchedEffect(tick, playing, seconds) {
@@ -620,6 +631,17 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     )
                 }
                 if (item.isVideo) {
+                    IconButton(onClick = {
+                        muted = !muted
+                        prefs.muted = muted
+                        touchStamp++
+                    }) {
+                        Icon(
+                            imageVector = if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = if (muted) "Activar sonido" else "Silenciar",
+                            tint = Color.White
+                        )
+                    }
                     IconButton(onClick = { (context.findActivity() as? MainActivity)?.enterPip() }) {
                         Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Imagen en imagen", tint = Color.White)
                     }
@@ -740,6 +762,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     options = ColorFilterType.entries.toList(),
                     selected = filterType,
                     label = { it.label },
+                    wrap = true,
                     onSelect = {
                         filterType = it
                         prefs.colorFilter = it.name
@@ -823,27 +846,37 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> ChipRow(
     title: String,
     options: List<T>,
     selected: T,
     label: (T) -> String,
-    onSelect: (T) -> Unit
+    onSelect: (T) -> Unit,
+    wrap: Boolean = false
 ) {
+    val chips: @Composable () -> Unit = {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) }
+            )
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(title, style = MaterialTheme.typography.titleSmall)
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            options.forEach { option ->
-                FilterChip(
-                    selected = option == selected,
-                    onClick = { onSelect(option) },
-                    label = { Text(label(option)) }
-                )
-            }
+        if (wrap) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) { chips() }
+        } else {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) { chips() }
         }
     }
 }

@@ -32,8 +32,12 @@ fun MixRoot(
             LibraryScreen(
                 vm = vm,
                 onPlay = { nav.navigate("player") },
-                onPlaylists = { nav.navigate("playlists") }
+                onPlaylists = { nav.navigate("playlists") },
+                onFolders = { nav.navigate("folders") }
             )
+        }
+        composable("folders") {
+            FoldersScreen(vm = vm, onBack = { nav.popBackStack() })
         }
         composable("playlists") {
             PlaylistsScreen(

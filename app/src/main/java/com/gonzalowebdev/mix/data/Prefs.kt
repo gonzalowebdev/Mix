@@ -37,6 +37,41 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("bgPlayback", false)
         set(v) = sp.edit().putBoolean("bgPlayback", v).apply()
 
+    var muted: Boolean
+        get() = sp.getBoolean("muted", true)
+        set(v) = sp.edit().putBoolean("muted", v).apply()
+
+    var typeFilter: String
+        get() = sp.getString("typeFilter", "ALL") ?: "ALL"
+        set(v) = sp.edit().putString("typeFilter", v).apply()
+
+    var folderFilter: String?
+        get() = sp.getString("folderFilter", null)
+        set(v) {
+            if (v == null) sp.edit().remove("folderFilter").apply() else sp.edit().putString("folderFilter", v).apply()
+        }
+
+    var favoritesOnly: Boolean
+        get() = sp.getBoolean("favoritesOnly", false)
+        set(v) = sp.edit().putBoolean("favoritesOnly", v).apply()
+
+    var sortField: String
+        get() = sp.getString("sortField", "RANDOM") ?: "RANDOM"
+        set(v) = sp.edit().putString("sortField", v).apply()
+
+    var sortAsc: Boolean
+        get() = sp.getBoolean("sortAsc", false)
+        set(v) = sp.edit().putBoolean("sortAsc", v).apply()
+
+    /** true = se muestran todas las carpetas; false = solo las elegidas en selectedFolders */
+    var useAllFolders: Boolean
+        get() = sp.getBoolean("useAllFolders", true)
+        set(v) = sp.edit().putBoolean("useAllFolders", v).apply()
+
+    var selectedFolders: Set<String>
+        get() = (sp.getStringSet("selectedFolders", emptySet()) ?: emptySet()).toSet()
+        set(v) = sp.edit().putStringSet("selectedFolders", v).apply()
+
     var mosaic: Boolean
         get() = sp.getBoolean("mosaic", true)
         set(v) = sp.edit().putBoolean("mosaic", v).apply()

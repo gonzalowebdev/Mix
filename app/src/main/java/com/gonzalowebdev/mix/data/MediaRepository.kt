@@ -41,7 +41,8 @@ class MediaRepository(private val context: Context) {
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.WIDTH,
             MediaStore.Video.Media.HEIGHT,
-            MediaStore.Video.Media.BUCKET_DISPLAY_NAME
+            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Video.Media.BUCKET_ID
         ) else arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
@@ -49,7 +50,8 @@ class MediaRepository(private val context: Context) {
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.BUCKET_DISPLAY_NAME
+            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.BUCKET_ID
         )
 
         val result = ArrayList<MediaFile>()
@@ -61,6 +63,7 @@ class MediaRepository(private val context: Context) {
             val wCol = c.getColumnIndex(MediaStore.MediaColumns.WIDTH)
             val hCol = c.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
             val bucketCol = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+            val bucketIdCol = c.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
             val durCol = if (video) c.getColumnIndex(MediaStore.Video.Media.DURATION) else -1
 
             while (c.moveToNext()) {
@@ -75,6 +78,7 @@ class MediaRepository(private val context: Context) {
                     size = c.getLong(sizeCol),
                     durationMs = if (durCol >= 0) c.getLong(durCol) else 0L,
                     folder = if (folder.isNullOrBlank()) "Sin carpeta" else folder,
+                    folderId = if (bucketIdCol >= 0) c.getString(bucketIdCol) ?: (folder ?: "") else (folder ?: ""),
                     width = if (wCol >= 0) c.getInt(wCol) else 0,
                     height = if (hCol >= 0) c.getInt(hCol) else 0
                 )
@@ -137,6 +141,7 @@ class MediaRepository(private val context: Context) {
             size = size,
             durationMs = duration,
             folder = "Agregados",
+            folderId = "extras",
             width = w,
             height = h,
             isExtra = true

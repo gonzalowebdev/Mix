@@ -115,7 +115,8 @@ private fun hasAccess(context: android.content.Context, perms: Array<String>): B
 fun LibraryScreen(
     vm: MixViewModel,
     onPlay: () -> Unit,
-    onPlaylists: () -> Unit
+    onPlaylists: () -> Unit,
+    onFolders: () -> Unit
 ) {
     val context = LocalContext.current
     val perms = remember { requiredPermissions() }
@@ -338,6 +339,13 @@ fun LibraryScreen(
                                         }
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("Elegir carpetas…") },
+                                        onClick = {
+                                            topMenu = false
+                                            onFolders()
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Actualizar biblioteca") },
                                         onClick = {
                                             topMenu = false
@@ -372,7 +380,7 @@ fun LibraryScreen(
                     }
                 )
             } else {
-                FilterBar(vm)
+                FilterBar(vm, onFolders)
                 Text(
                     text = "${vm.visible.size} archivos",
                     style = MaterialTheme.typography.labelMedium,
@@ -383,7 +391,11 @@ fun LibraryScreen(
                     when {
                         vm.loading && vm.allMedia.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                         vm.visible.isEmpty() -> Text(
-                            text = if (vm.allMedia.isEmpty()) "No se encontraron imágenes ni videos" else "Sin resultados",
+                            text = when {
+                                vm.allMedia.isEmpty() -> "No se encontraron imágenes ni videos"
+                                vm.scopedMedia.isEmpty() -> "No hay carpetas seleccionadas.\nElegí cuáles mostrar desde el chip \"Carpetas\"."
+                                else -> "Sin resultados"
+                            },
                             textAlign = TextAlign.Center,
                             modifier = Modifier.align(Alignment.Center).padding(24.dp)
                         )
@@ -444,7 +456,7 @@ private fun PermissionPrompt(onGrant: () -> Unit, onSettings: () -> Unit) {
 }
 
 @Composable
-private fun FilterBar(vm: MixViewModel) {
+private fun FilterBar(vm: MixViewModel, onFolders: () -> Unit) {
     var folderMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
 
@@ -452,6 +464,16 @@ private fun FilterBar(vm: MixViewModel) {
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item {
+            FilterChip(
+                selected = !vm.useAllFolders,
+                onClick = onFolders,
+                label = {
+                    Text(if (vm.useAllFolders) "Carpetas" else "Carpetas (${vm.selectedFolders.size})")
+                },
+                leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) }
+            )
+        }
         item {
             FilterChip(
                 selected = vm.typeFilter == TypeFilter.ALL,

@@ -9,10 +9,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.gonzalowebdev.mix.MixApp
+import com.gonzalowebdev.mix.data.FolderInfo
 import com.gonzalowebdev.mix.data.MediaFile
 import com.gonzalowebdev.mix.data.MediaRepository
 import com.gonzalowebdev.mix.data.PlaylistEntity
@@ -46,14 +48,32 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     var query by mutableStateOf("")
-    var typeFilter by mutableStateOf(TypeFilter.ALL)
-    var folderFilter by mutableStateOf<String?>(null)
-    var favoritesOnly by mutableStateOf(false)
+    var typeFilter by mutableStateOf(
+        try { TypeFilter.valueOf(prefs.typeFilter) } catch (e: Exception) { TypeFilter.ALL }
+    )
+    var folderFilter by mutableStateOf<String?>(prefs.folderFilter)
+    var favoritesOnly by mutableStateOf(prefs.favoritesOnly)
 
     // Inicio en orden aleatorio (estilo mosaico)
-    var sortField by mutableStateOf(SortField.RANDOM)
-    var sortAsc by mutableStateOf(false)
+    var sortField by mutableStateOf(
+        try { SortField.valueOf(prefs.sortField) } catch (e: Exception) { SortField.RANDOM }
+    )
+    var sortAsc by mutableStateOf(prefs.sortAsc)
     var randomSeed by mutableLongStateOf(System.nanoTime())
+
+    init {
+        viewModelScope.launch {
+            snapshotFlow {
+                LibState(typeFilter.name, folderFilter, favoritesOnly, sortField.name, sortAsc)
+            }.collect { st ->
+                prefs.typeFilter = st.type
+                prefs.folderFilter = st.folder
+                prefs.favoritesOnly = st.fav
+                prefs.sortField = st.sort
+                prefs.sortAsc = st.asc
+            }
+        }
+    }
 
     var mosaic by mutableStateOf(prefs.mosaic)
         private set
@@ -73,12 +93,62 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     var favorites by mutableStateOf(prefs.favorites)
         private set
 
+    // ---------- Carpetas a mostrar ----------
+    var useAllFolders by mutableStateOf(prefs.useAllFolders)
+        private set
+    var selectedFolders by mutableStateOf(prefs.selectedFolders)
+        private set
+
+    /** Todas las carpetas del dispositivo (sin importar la selección). */
+    val allFolders: List<FolderInfo> by derivedStateOf {
+        allMedia.groupBy { it.folderId }
+            .map { (id, files) -> FolderInfo(id, files.first().folder, files.size, files.first()) }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    /** Biblioteca restringida a las carpetas elegidas. */
+    val scopedMedia: List<MediaFile> by derivedStateOf {
+        if (useAllFolders) allMedia else allMedia.filter { it.folderId in selectedFolders }
+    }
+
+    fun updateUseAllFolders(value: Boolean) {
+        if (!value && selectedFolders.isEmpty()) {
+            selectedFolders = allFolders.map { it.id }.toSet()
+            prefs.selectedFolders = selectedFolders
+        }
+        useAllFolders = value
+        prefs.useAllFolders = value
+        fixFolderFilter()
+    }
+
+    fun toggleFolder(id: String) {
+        selectedFolders = if (id in selectedFolders) selectedFolders - id else selectedFolders + id
+        prefs.selectedFolders = selectedFolders
+        fixFolderFilter()
+    }
+
+    fun selectAllFolders() {
+        selectedFolders = allFolders.map { it.id }.toSet()
+        prefs.selectedFolders = selectedFolders
+    }
+
+    fun selectNoFolders() {
+        selectedFolders = emptySet()
+        prefs.selectedFolders = selectedFolders
+        fixFolderFilter()
+    }
+
+    private fun fixFolderFilter() {
+        val f = folderFilter
+        if (f != null && f !in scopedMedia.map { it.folder }) folderFilter = null
+    }
+
     val folders: List<String> by derivedStateOf {
-        allMedia.map { it.folder }.distinct().sortedBy { it.lowercase() }
+        scopedMedia.map { it.folder }.distinct().sortedBy { it.lowercase() }
     }
 
     val visible: List<MediaFile> by derivedStateOf {
-        var list = allMedia
+        var list = scopedMedia
         when (typeFilter) {
             TypeFilter.IMAGES -> list = list.filter { !it.isVideo }
             TypeFilter.VIDEOS -> list = list.filter { it.isVideo }
@@ -285,7 +355,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
 
     fun smartMedia(s: SmartList): List<MediaFile> {
         val q = s.query.trim()
-        return allMedia.filter { f ->
+        return scopedMedia.filter { f ->
             (s.type == TypeFilter.ALL ||
                 (s.type == TypeFilter.IMAGES && !f.isVideo) ||
                 (s.type == TypeFilter.VIDEOS && f.isVideo)) &&
@@ -408,3 +478,11 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         emptyList()
     }
 }
+
+private data class LibState(
+    val type: String,
+    val folder: String?,
+    val fav: Boolean,
+    val sort: String,
+    val asc: Boolean
+)
