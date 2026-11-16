@@ -66,6 +66,12 @@ abstract class PlaylistDao {
     @Query("SELECT * FROM playlist_items WHERE playlistId = :id ORDER BY position")
     abstract fun items(id: Long): Flow<List<PlaylistItemEntity>>
 
+    @Query("SELECT * FROM playlists ORDER BY id")
+    abstract suspend fun allPlaylists(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlist_items ORDER BY playlistId, position")
+    abstract suspend fun allItems(): List<PlaylistItemEntity>
+
     @Insert
     abstract suspend fun insertPlaylist(p: PlaylistEntity): Long
 

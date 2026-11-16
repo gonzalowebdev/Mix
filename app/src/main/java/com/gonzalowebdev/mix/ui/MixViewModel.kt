@@ -1,6 +1,8 @@
 package com.gonzalowebdev.mix.ui
 
 import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -17,18 +19,23 @@ import com.gonzalowebdev.mix.data.PlaylistEntity
 import com.gonzalowebdev.mix.data.PlaylistItemEntity
 import com.gonzalowebdev.mix.data.Prefs
 import com.gonzalowebdev.mix.data.QueueItem
+import com.gonzalowebdev.mix.data.SmartList
 import com.gonzalowebdev.mix.data.SortField
 import com.gonzalowebdev.mix.data.TypeFilter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.random.Random
 
 class MixViewModel(app: Application) : AndroidViewModel(app) {
 
+    val prefs = Prefs(app)
     private val repo = MediaRepository(app)
     private val dao = (app as MixApp).db.dao()
-    val prefs = Prefs(app)
 
     // ---------- Biblioteca ----------
     var allMedia by mutableStateOf<List<MediaFile>>(emptyList())
@@ -41,11 +48,30 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var typeFilter by mutableStateOf(TypeFilter.ALL)
     var folderFilter by mutableStateOf<String?>(null)
-    var sortField by mutableStateOf(SortField.DATE)
+    var favoritesOnly by mutableStateOf(false)
+
+    // Inicio en orden aleatorio (estilo mosaico)
+    var sortField by mutableStateOf(SortField.RANDOM)
     var sortAsc by mutableStateOf(false)
     var randomSeed by mutableLongStateOf(System.nanoTime())
 
+    var mosaic by mutableStateOf(prefs.mosaic)
+        private set
+
+    fun setMosaic(value: Boolean) {
+        mosaic = value
+        prefs.mosaic = value
+    }
+
+    fun reshuffle() {
+        sortField = SortField.RANDOM
+        randomSeed = System.nanoTime()
+    }
+
     val selected = mutableStateListOf<String>()
+
+    var favorites by mutableStateOf(prefs.favorites)
+        private set
 
     val folders: List<String> by derivedStateOf {
         allMedia.map { it.folder }.distinct().sortedBy { it.lowercase() }
@@ -59,6 +85,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
             TypeFilter.ALL -> Unit
         }
         folderFilter?.let { f -> list = list.filter { it.folder == f } }
+        if (favoritesOnly) list = list.filter { it.key in favorites }
         val q = query.trim()
         if (q.isNotEmpty()) {
             list = list.filter {
@@ -84,7 +111,9 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             loading = true
             try {
-                allMedia = repo.load()
+                val device = repo.load()
+                val extras = repo.loadExtras(prefs.extraUris)
+                allMedia = device + extras
                 if (folderFilter != null && folderFilter !in folders) folderFilter = null
                 loadedOnce = true
             } finally {
@@ -104,11 +133,34 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSelection() = selected.clear()
 
+    // ---------- Favoritos ----------
+    fun toggleFavorite(files: List<MediaFile>) {
+        val keys = files.map { it.key }.toSet()
+        val allFav = files.isNotEmpty() && files.all { it.key in favorites }
+        favorites = if (allFav) favorites - keys else favorites + keys
+        prefs.favorites = favorites
+    }
+
+    // ---------- Archivos agregados manualmente ----------
+    fun addExtras(uris: List<Uri>) {
+        prefs.extraUris = prefs.extraUris + uris.map { it.toString() }
+        refresh()
+    }
+
+    fun removeExtras(keys: Collection<String>) {
+        prefs.extraUris = prefs.extraUris - keys.toSet()
+        refresh()
+    }
+
     // ---------- Reproductor ----------
     var queue by mutableStateOf<List<QueueItem>>(emptyList())
         private set
     var startIndex by mutableIntStateOf(0)
         private set
+
+    /** Los marca la pantalla del reproductor / la actividad para imagen en imagen. */
+    var pipReady by mutableStateOf(false)
+    var inPip by mutableStateOf(false)
 
     fun playQueue(items: List<QueueItem>, start: Int) {
         queue = items
@@ -122,6 +174,23 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playSelected() {
         playQueue(selectedFiles.map { it.toQueueItem() }, 0)
+    }
+
+    fun playExternal(uri: Uri) {
+        val cr = getApplication<Application>().contentResolver
+        val mime = cr.getType(uri) ?: ""
+        var name: String? = null
+        try {
+            cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) name = c.getString(0)
+            }
+        } catch (e: Exception) {
+            // nombre no disponible
+        }
+        playQueue(
+            listOf(QueueItem(uri.toString(), name ?: uri.lastPathSegment ?: "Archivo", mime.startsWith("video"), 0L)),
+            0
+        )
     }
 
     // ---------- Listas de reproducción ----------
@@ -158,5 +227,184 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
 
     fun reorder(ids: List<Long>) {
         viewModelScope.launch { dao.reorder(ids) }
+    }
+
+    // ---------- Listas inteligentes ----------
+    var smartLists by mutableStateOf(loadSmart())
+        private set
+
+    private fun loadSmart(): List<SmartList> = try {
+        val arr = JSONArray(prefs.smartListsJson)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            SmartList(
+                id = o.getLong("id"),
+                name = o.getString("name"),
+                type = TypeFilter.valueOf(o.getString("type")),
+                folder = if (o.isNull("folder")) null else o.getString("folder"),
+                minMinutes = o.getInt("min"),
+                maxMinutes = o.getInt("max"),
+                query = o.getString("query"),
+                favoritesOnly = o.getBoolean("fav")
+            )
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun smartToJson(list: List<SmartList>): JSONArray {
+        val arr = JSONArray()
+        for (s in list) {
+            val o = JSONObject()
+            o.put("id", s.id)
+            o.put("name", s.name)
+            o.put("type", s.type.name)
+            o.put("folder", s.folder ?: JSONObject.NULL)
+            o.put("min", s.minMinutes)
+            o.put("max", s.maxMinutes)
+            o.put("query", s.query)
+            o.put("fav", s.favoritesOnly)
+            arr.put(o)
+        }
+        return arr
+    }
+
+    private fun saveSmart(list: List<SmartList>) {
+        smartLists = list
+        prefs.smartListsJson = smartToJson(list).toString()
+    }
+
+    fun saveSmartList(s: SmartList) {
+        val list = smartLists.toMutableList()
+        val i = list.indexOfFirst { it.id == s.id }
+        if (i >= 0) list[i] = s else list.add(s)
+        saveSmart(list)
+    }
+
+    fun deleteSmartList(id: Long) = saveSmart(smartLists.filter { it.id != id })
+
+    fun smartMedia(s: SmartList): List<MediaFile> {
+        val q = s.query.trim()
+        return allMedia.filter { f ->
+            (s.type == TypeFilter.ALL ||
+                (s.type == TypeFilter.IMAGES && !f.isVideo) ||
+                (s.type == TypeFilter.VIDEOS && f.isVideo)) &&
+                (s.folder == null || f.folder == s.folder) &&
+                (s.minMinutes <= 0 || (f.isVideo && f.durationMs >= s.minMinutes * 60_000L)) &&
+                (s.maxMinutes <= 0 || (f.isVideo && f.durationMs <= s.maxMinutes * 60_000L)) &&
+                (q.isEmpty() || f.name.contains(q, ignoreCase = true)) &&
+                (!s.favoritesOnly || f.key in favorites)
+        }.sortedByDescending { it.dateAdded }
+    }
+
+    fun playSmart(s: SmartList) {
+        val list = smartMedia(s)
+        if (list.isNotEmpty()) playQueue(list.map { it.toQueueItem() }, 0)
+    }
+
+    // ---------- Exportar / importar listas ----------
+    private suspend fun exportJson(): String {
+        val lists = dao.allPlaylists()
+        val grouped = dao.allItems().groupBy { it.playlistId }
+        val root = JSONObject()
+        root.put("app", "Mix")
+        root.put("version", 1)
+        val arr = JSONArray()
+        for (p in lists) {
+            val o = JSONObject()
+            o.put("name", p.name)
+            val itemsArr = JSONArray()
+            for (item in grouped[p.id].orEmpty()) {
+                val io = JSONObject()
+                io.put("uri", item.uri)
+                io.put("name", item.name)
+                io.put("isVideo", item.isVideo)
+                io.put("durationMs", item.durationMs)
+                itemsArr.put(io)
+            }
+            o.put("items", itemsArr)
+            arr.put(o)
+        }
+        root.put("playlists", arr)
+        root.put("smartLists", smartToJson(smartLists))
+        return root.toString(2)
+    }
+
+    fun exportTo(uri: Uri, onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try {
+                val json = exportJson()
+                withContext(Dispatchers.IO) {
+                    val out = getApplication<Application>().contentResolver.openOutputStream(uri, "w")
+                        ?: throw IllegalStateException("sin salida")
+                    out.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                }
+                true
+            } catch (e: Exception) {
+                false
+            }
+            onDone(ok)
+        }
+    }
+
+    fun importFrom(uri: Uri, onDone: (Int) -> Unit) {
+        viewModelScope.launch {
+            val count = try {
+                val text = withContext(Dispatchers.IO) {
+                    val input = getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException("sin entrada")
+                    input.use { String(it.readBytes(), Charsets.UTF_8) }
+                }
+                importJson(text)
+            } catch (e: Exception) {
+                -1
+            }
+            onDone(count)
+        }
+    }
+
+    private suspend fun importJson(text: String): Int {
+        val root = JSONObject(text)
+        val arr = root.getJSONArray("playlists")
+        var count = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = dao.insertPlaylist(
+                PlaylistEntity(name = o.getString("name"), createdAt = System.currentTimeMillis())
+            )
+            val itemsArr = o.getJSONArray("items")
+            val items = (0 until itemsArr.length()).map { j ->
+                val io = itemsArr.getJSONObject(j)
+                QueueItem(io.getString("uri"), io.getString("name"), io.getBoolean("isVideo"), io.getLong("durationMs"))
+            }
+            if (items.isNotEmpty()) dao.addItems(id, items)
+            count++
+        }
+        if (root.has("smartLists")) {
+            val sArr = root.getJSONArray("smartLists")
+            val incoming = ArrayList<SmartList>()
+            val tmp = loadSmartFrom(sArr)
+            tmp.forEachIndexed { index, s -> incoming += s.copy(id = System.nanoTime() + index) }
+            if (incoming.isNotEmpty()) saveSmart(smartLists + incoming)
+        }
+        return count
+    }
+
+    private fun loadSmartFrom(arr: JSONArray): List<SmartList> = try {
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            SmartList(
+                id = o.getLong("id"),
+                name = o.getString("name"),
+                type = TypeFilter.valueOf(o.getString("type")),
+                folder = if (o.isNull("folder")) null else o.getString("folder"),
+                minMinutes = o.getInt("min"),
+                maxMinutes = o.getInt("max"),
+                query = o.getString("query"),
+                favoritesOnly = o.getBoolean("fav")
+            )
+        }
+    } catch (e: Exception) {
+        emptyList()
     }
 }

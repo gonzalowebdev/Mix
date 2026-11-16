@@ -1,6 +1,8 @@
 package com.gonzalowebdev.mix.ui
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -9,8 +11,22 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 
 @Composable
-fun MixRoot(vm: MixViewModel = viewModel()) {
+fun MixRoot(
+    externalUri: Uri?,
+    onExternalHandled: () -> Unit,
+    vm: MixViewModel = viewModel()
+) {
     val nav = rememberNavController()
+
+    LaunchedEffect(externalUri) {
+        if (externalUri != null) {
+            vm.playExternal(externalUri)
+            nav.popBackStack("library", false)
+            nav.navigate("player")
+            onExternalHandled()
+        }
+    }
+
     NavHost(navController = nav, startDestination = "library") {
         composable("library") {
             LibraryScreen(
@@ -23,7 +39,8 @@ fun MixRoot(vm: MixViewModel = viewModel()) {
             PlaylistsScreen(
                 vm = vm,
                 onBack = { nav.popBackStack() },
-                onOpen = { id -> nav.navigate("playlist/$id") }
+                onOpen = { id -> nav.navigate("playlist/$id") },
+                onPlay = { nav.navigate("player") }
             )
         }
         composable(
