@@ -12,12 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -88,16 +82,16 @@ fun PlaylistDetailScreen(
                 title = { Text(playlist?.name ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                        Icon(MixIcons.ArrowBack, contentDescription = "Volver")
                     }
                 },
                 actions = {
                     IconButton(enabled = items.isNotEmpty(), onClick = { play(0) }) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir")
+                        Icon(MixIcons.PlayArrow, contentDescription = "Reproducir")
                     }
                     Box {
                         IconButton(onClick = { menu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Opciones")
+                            Icon(MixIcons.MoreVert, contentDescription = "Opciones")
                         }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(
@@ -146,7 +140,7 @@ fun PlaylistDetailScreen(
                                 trailingContent = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         IconButton(onClick = { vm.removeItem(item) }) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Quitar de la lista")
+                                            Icon(MixIcons.Delete, contentDescription = "Quitar de la lista")
                                         }
                                         IconButton(
                                             onClick = {},
@@ -154,7 +148,7 @@ fun PlaylistDetailScreen(
                                                 onDragStopped = { vm.reorder(items.map { it.id }) }
                                             )
                                         ) {
-                                            Icon(Icons.Default.DragHandle, contentDescription = "Reordenar")
+                                            Icon(MixIcons.DragHandle, contentDescription = "Reordenar")
                                         }
                                     }
                                 },

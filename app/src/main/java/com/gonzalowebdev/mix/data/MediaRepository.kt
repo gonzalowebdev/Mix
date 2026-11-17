@@ -37,6 +37,8 @@ class MediaRepository(private val context: Context) {
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DATE_ADDED,
+            MediaStore.Video.Media.DATE_TAKEN,
+            MediaStore.Video.Media.DATE_MODIFIED,
             MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.WIDTH,
@@ -47,6 +49,8 @@ class MediaRepository(private val context: Context) {
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
@@ -60,6 +64,8 @@ class MediaRepository(private val context: Context) {
             val nameCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
             val sizeCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val takenCol = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+            val modCol = c.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
             val wCol = c.getColumnIndex(MediaStore.MediaColumns.WIDTH)
             val hCol = c.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
             val bucketCol = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
@@ -69,6 +75,8 @@ class MediaRepository(private val context: Context) {
             while (c.moveToNext()) {
                 val id = c.getLong(idCol)
                 val folder = if (bucketCol >= 0) c.getString(bucketCol) else null
+                val taken = if (takenCol >= 0 && !c.isNull(takenCol)) c.getLong(takenCol) else 0L
+                val modified = if (modCol >= 0 && !c.isNull(modCol)) c.getLong(modCol) * 1000L else 0L
                 result += MediaFile(
                     id = id,
                     uri = ContentUris.withAppendedId(base, id),
@@ -80,7 +88,9 @@ class MediaRepository(private val context: Context) {
                     folder = if (folder.isNullOrBlank()) "Sin carpeta" else folder,
                     folderId = if (bucketIdCol >= 0) c.getString(bucketIdCol) ?: (folder ?: "") else (folder ?: ""),
                     width = if (wCol >= 0) c.getInt(wCol) else 0,
-                    height = if (hCol >= 0) c.getInt(hCol) else 0
+                    height = if (hCol >= 0) c.getInt(hCol) else 0,
+                    dateTaken = if (taken > 0) taken else modified,
+                    realDate = taken > 0
                 )
             }
         }

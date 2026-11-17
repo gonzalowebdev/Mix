@@ -4,15 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,7 +40,7 @@ import com.gonzalowebdev.mix.data.FolderInfo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FoldersScreen(vm: MixViewModel, onBack: () -> Unit) {
+fun FoldersScreen(vm: MixViewModel) {
     val folders = vm.allFolders
     val useAll = vm.useAllFolders
     val selected = vm.selectedFolders
@@ -51,17 +49,12 @@ fun FoldersScreen(vm: MixViewModel, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Carpetas") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
-                    }
-                },
+                title = { Text("Carpetas", style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     if (!useAll) {
                         Box {
                             IconButton(onClick = { menu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Más opciones")
+                                Icon(MixIcons.MoreVert, contentDescription = "Más opciones")
                             }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 DropdownMenuItem(
@@ -99,7 +92,10 @@ fun FoldersScreen(vm: MixViewModel, onBack: () -> Unit) {
                 },
                 modifier = Modifier.clickable { vm.updateUseAllFolders(!useAll) }
             )
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = LocalNavInset.current + 8.dp)
+            ) {
                 items(folders, key = { it.id }) { f ->
                     val checked = useAll || f.id in selected
                     ListItem(

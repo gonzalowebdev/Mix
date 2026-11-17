@@ -27,28 +27,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -89,6 +79,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFramePercent
 import com.gonzalowebdev.mix.data.MediaFile
+import com.gonzalowebdev.mix.data.Memory
 import com.gonzalowebdev.mix.data.SortField
 import com.gonzalowebdev.mix.data.TypeFilter
 import kotlinx.coroutines.launch
@@ -115,7 +106,6 @@ private fun hasAccess(context: android.content.Context, perms: Array<String>): B
 fun LibraryScreen(
     vm: MixViewModel,
     onPlay: () -> Unit,
-    onPlaylists: () -> Unit,
     onFolders: () -> Unit
 ) {
     val context = LocalContext.current
@@ -211,26 +201,26 @@ fun LibraryScreen(
                     title = { Text("${vm.selectedFiles.size} seleccionados") },
                     navigationIcon = {
                         IconButton(onClick = { vm.clearSelection() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancelar selección")
+                            Icon(MixIcons.Close, contentDescription = "Cancelar selección")
                         }
                     },
                     actions = {
                         IconButton(onClick = { vm.selectAllVisible() }) {
-                            Icon(Icons.Default.SelectAll, contentDescription = "Seleccionar todo")
+                            Icon(MixIcons.SelectAll, contentDescription = "Seleccionar todo")
                         }
                         IconButton(onClick = {
                             vm.playSelected()
                             vm.clearSelection()
                             onPlay()
                         }) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproducir selección")
+                            Icon(MixIcons.PlayArrow, contentDescription = "Reproducir selección")
                         }
                         IconButton(onClick = { showAdd = true }) {
-                            Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = "Agregar a lista")
+                            Icon(MixIcons.PlaylistAdd, contentDescription = "Agregar a lista")
                         }
                         Box {
                             IconButton(onClick = { selMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Más opciones")
+                                Icon(MixIcons.MoreVert, contentDescription = "Más opciones")
                             }
                             DropdownMenu(expanded = selMenu, onDismissRequest = { selMenu = false }) {
                                 val files = vm.selectedFiles
@@ -296,7 +286,19 @@ fun LibraryScreen(
                                     .focusRequester(focus)
                             )
                         } else {
-                            Text("Mix")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    MixIcons.Logo,
+                                    contentDescription = null,
+                                    tint = MixColors.Pink,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                                Text(
+                                    "mix",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    modifier = Modifier.padding(start = 8.dp)
+                                )
+                            }
                         }
                     },
                     navigationIcon = {
@@ -305,7 +307,7 @@ fun LibraryScreen(
                                 searching = false
                                 vm.query = ""
                             }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cerrar búsqueda")
+                                Icon(MixIcons.ArrowBack, contentDescription = "Cerrar búsqueda")
                             }
                         }
                     },
@@ -313,22 +315,19 @@ fun LibraryScreen(
                         if (searching) {
                             if (vm.query.isNotEmpty()) {
                                 IconButton(onClick = { vm.query = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Borrar texto")
+                                    Icon(MixIcons.Clear, contentDescription = "Borrar texto")
                                 }
                             }
                         } else {
                             IconButton(onClick = { vm.reshuffle() }) {
-                                Icon(Icons.Default.Shuffle, contentDescription = "Mezclar")
+                                Icon(MixIcons.Shuffle, contentDescription = "Mezclar")
                             }
                             IconButton(onClick = { searching = true }) {
-                                Icon(Icons.Default.Search, contentDescription = "Buscar")
-                            }
-                            IconButton(onClick = onPlaylists) {
-                                Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = "Listas de reproducción")
+                                Icon(MixIcons.Search, contentDescription = "Buscar")
                             }
                             Box {
                                 IconButton(onClick = { topMenu = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "Más opciones")
+                                    Icon(MixIcons.MoreVert, contentDescription = "Más opciones")
                                 }
                                 DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
                                     DropdownMenuItem(
@@ -336,13 +335,6 @@ fun LibraryScreen(
                                         onClick = {
                                             topMenu = false
                                             addFilesLauncher.launch(arrayOf("image/*", "video/*"))
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Elegir carpetas…") },
-                                        onClick = {
-                                            topMenu = false
-                                            onFolders()
                                         }
                                     )
                                     DropdownMenuItem(
@@ -471,7 +463,7 @@ private fun FilterBar(vm: MixViewModel, onFolders: () -> Unit) {
                 label = {
                     Text(if (vm.useAllFolders) "Carpetas" else "Carpetas (${vm.selectedFolders.size})")
                 },
-                leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                leadingIcon = { Icon(MixIcons.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) }
             )
         }
         item {
@@ -500,7 +492,7 @@ private fun FilterBar(vm: MixViewModel, onFolders: () -> Unit) {
                 selected = vm.favoritesOnly,
                 onClick = { vm.favoritesOnly = !vm.favoritesOnly },
                 label = { Text("Favoritos") },
-                leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                leadingIcon = { Icon(MixIcons.Favorite, contentDescription = null, modifier = Modifier.size(18.dp)) }
             )
         }
         item {
@@ -509,7 +501,7 @@ private fun FilterBar(vm: MixViewModel, onFolders: () -> Unit) {
                     selected = vm.folderFilter != null,
                     onClick = { folderMenu = true },
                     label = { Text(vm.folderFilter ?: "Carpeta", maxLines = 1) },
-                    leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    leadingIcon = { Icon(MixIcons.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }) {
                     DropdownMenuItem(
@@ -542,7 +534,7 @@ private fun FilterBar(vm: MixViewModel, onFolders: () -> Unit) {
                     selected = false,
                     onClick = { sortMenu = true },
                     label = { Text(vm.sortField.label + arrow) },
-                    leadingIcon = { Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    leadingIcon = { Icon(MixIcons.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp)) }
                 )
                 DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                     SortField.entries.forEach { field ->
@@ -583,15 +575,24 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
     val selectedKeys = vm.selected
     val selecting = selectedKeys.isNotEmpty()
     val favorites = vm.favorites
+    val inset = LocalNavInset.current
+    val memories = vm.memories
+    val showMemories = memories.isNotEmpty() && vm.query.isBlank() && vm.typeFilter == TypeFilter.ALL &&
+        vm.folderFilter == null && !vm.favoritesOnly
 
     if (vm.mosaic) {
         LazyVerticalStaggeredGrid(
             columns = StaggeredGridCells.Adaptive(150.dp),
-            contentPadding = PaddingValues(6.dp),
+            contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp + inset),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalItemSpacing = 6.dp,
             modifier = Modifier.fillMaxSize()
         ) {
+            if (showMemories) {
+                item(key = "memories", span = StaggeredGridItemSpan.FullLine) {
+                    MemoriesRow(vm, memories, onPlay)
+                }
+            }
             items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
                 MediaCell(
                     file = file,
@@ -614,11 +615,16 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
     } else {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(104.dp),
-            contentPadding = PaddingValues(4.dp),
+            contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp + inset),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.fillMaxSize()
         ) {
+            if (showMemories) {
+                item(key = "memories", span = { GridItemSpan(maxLineSpan) }) {
+                    MemoriesRow(vm, memories, onPlay)
+                }
+            }
             items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
                 MediaCell(
                     file = file,
@@ -683,13 +689,13 @@ private fun MediaCell(
                     .padding(horizontal = 5.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Icon(MixIcons.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                 Text(formatDuration(file.durationMs), color = Color.White, style = MaterialTheme.typography.labelSmall)
             }
         }
         if (favorite) {
             Icon(
-                Icons.Default.Favorite,
+                MixIcons.FavoriteFilled,
                 contentDescription = "Favorito",
                 tint = Color(0xFFFF5C7A),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).size(18.dp)
@@ -698,18 +704,42 @@ private fun MediaCell(
         if (selected) {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)))
             Icon(
-                Icons.Default.CheckCircle,
+                MixIcons.CheckCircle,
                 contentDescription = "Seleccionado",
                 tint = Color.White,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
             )
         } else if (selecting) {
             Icon(
-                Icons.Default.RadioButtonUnchecked,
+                MixIcons.RadioButtonUnchecked,
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun MemoriesRow(vm: MixViewModel, memories: List<Memory>, onPlay: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        Text(
+            "Recuerdos",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(start = 6.dp, top = 4.dp, bottom = 10.dp)
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(memories.take(10), key = { it.id }) { m ->
+                MemoryCard(
+                    memory = m,
+                    compact = true,
+                    modifier = Modifier.width(132.dp).height(176.dp),
+                    onClick = {
+                        vm.playMemory(m)
+                        onPlay()
+                    }
+                )
+            }
         }
     }
 }

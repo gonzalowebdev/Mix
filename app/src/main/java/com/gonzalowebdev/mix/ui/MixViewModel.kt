@@ -17,6 +17,8 @@ import com.gonzalowebdev.mix.MixApp
 import com.gonzalowebdev.mix.data.FolderInfo
 import com.gonzalowebdev.mix.data.MediaFile
 import com.gonzalowebdev.mix.data.MediaRepository
+import com.gonzalowebdev.mix.data.Memory
+import com.gonzalowebdev.mix.data.MemoryGenerator
 import com.gonzalowebdev.mix.data.PlaylistEntity
 import com.gonzalowebdev.mix.data.PlaylistItemEntity
 import com.gonzalowebdev.mix.data.Prefs
@@ -31,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 import kotlin.random.Random
 
 class MixViewModel(app: Application) : AndroidViewModel(app) {
@@ -202,6 +205,15 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearSelection() = selected.clear()
+
+    // ---------- Recuerdos ----------
+    val memories: List<Memory> by derivedStateOf {
+        MemoryGenerator.generate(scopedMedia, favorites, LocalDate.now())
+    }
+
+    fun playMemory(memory: Memory) {
+        playQueue(memory.files.map { it.toQueueItem() }, 0)
+    }
 
     // ---------- Favoritos ----------
     fun toggleFavorite(files: List<MediaFile>) {

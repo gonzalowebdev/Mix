@@ -37,6 +37,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("bgPlayback", false)
         set(v) = sp.edit().putBoolean("bgPlayback", v).apply()
 
+    /** true = el feed se desliza en vertical (estilo TikTok) */
+    var feedVertical: Boolean
+        get() = sp.getBoolean("feedVertical", true)
+        set(v) = sp.edit().putBoolean("feedVertical", v).apply()
+
     var muted: Boolean
         get() = sp.getBoolean("muted", true)
         set(v) = sp.edit().putBoolean("muted", v).apply()

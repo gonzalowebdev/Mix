@@ -13,18 +13,11 @@ import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -46,24 +39,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PictureInPictureAlt
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -80,12 +62,16 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -93,6 +79,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -117,17 +104,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.request.videoFramePercent
 import com.gonzalowebdev.mix.MainActivity
 import com.gonzalowebdev.mix.PlaybackService
 import com.gonzalowebdev.mix.R
 import com.gonzalowebdev.mix.data.ColorFilterType
-import com.gonzalowebdev.mix.data.QueueItem
 import kotlinx.coroutines.delay
-import kotlin.math.abs
+import kotlinx.coroutines.launch
 import android.graphics.ColorMatrix as AndroidColorMatrix
 import androidx.compose.ui.graphics.ColorMatrix as ComposeColorMatrix
-
-private data class Slide(val tick: Int, val item: QueueItem)
 
 private fun buildOrder(n: Int, current: Int, shuffle: Boolean): Pair<List<Int>, Int> =
     if (!shuffle) {
@@ -136,7 +121,7 @@ private fun buildOrder(n: Int, current: Int, shuffle: Boolean): Pair<List<Int>, 
         (listOf(current) + (0 until n).filter { it != current }.shuffled()) to 0
     }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val queue = vm.queue
@@ -148,20 +133,22 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val context = LocalContext.current
     val view = LocalView.current
     val prefs = vm.prefs
+    val scope = rememberCoroutineScope()
     val inPip = vm.inPip
 
     // ---- Estado ----
     val initial = remember { buildOrder(queue.size, vm.startIndex.coerceIn(0, queue.size - 1), prefs.shuffle) }
     var order by remember { mutableStateOf(initial.first) }
-    var pos by remember { mutableIntStateOf(initial.second) }
+    val pagerState = rememberPagerState(initialPage = initial.second) { order.size }
+
     var tick by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(true) }
     var finished by remember { mutableStateOf(false) }
     var shuffle by remember { mutableStateOf(prefs.shuffle) }
     var repeat by remember { mutableIntStateOf(prefs.repeatMode) }
     var seconds by remember { mutableIntStateOf(prefs.imageSeconds) }
-    var transition by remember { mutableIntStateOf(prefs.transition) }
     var speed by remember { mutableFloatStateOf(prefs.speed) }
+    var verticalFeed by remember { mutableStateOf(prefs.feedVertical) }
     var filterType by remember {
         mutableStateOf(
             try {
@@ -180,61 +167,115 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var videoPos by remember { mutableLongStateOf(0L) }
     var videoDur by remember { mutableLongStateOf(0L) }
     var showOptions by remember { mutableStateOf(false) }
-    var dir by remember { mutableIntStateOf(1) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var hint by remember { mutableStateOf("") }
     var hintStamp by remember { mutableIntStateOf(0) }
 
-    val item = queue[order[pos]]
     val imgProgress = remember { Animatable(0f) }
-
     val composeFilter = remember(filterType) {
         filterType.values?.let { ColorFilter.colorMatrix(ComposeColorMatrix(it)) }
     }
 
-    // ---- ExoPlayer ----
-    val player = remember {
-        ExoPlayer.Builder(context)
-            .setAudioAttributes(AudioAttributes.DEFAULT, !prefs.muted)
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_LOCAL)
-            .build()
+    // Dos reproductores: uno reproduce y el otro precarga el siguiente video
+    val players = remember {
+        List(2) {
+            ExoPlayer.Builder(context)
+                .setAudioAttributes(AudioAttributes.DEFAULT, !prefs.muted)
+                .setHandleAudioBecomingNoisy(true)
+                .setWakeMode(C.WAKE_MODE_LOCAL)
+                .build()
+        }
+    }
+    val slotPage = remember { mutableStateListOf(-1, -1) }
+    var activeSlot by remember { mutableIntStateOf(0) }
+    var lastSettled by remember { mutableIntStateOf(pagerState.settledPage) }
+
+    fun itemAt(page: Int) = queue[order[page.coerceIn(0, order.size - 1)]]
+    fun settled() = pagerState.settledPage.coerceIn(0, order.size - 1)
+    fun currentIsVideo(): Boolean = itemAt(settled()).isVideo
+
+    fun savePosition(page: Int, slot: Int) {
+        val it = itemAt(page)
+        if (!it.isVideo) return
+        val p = players[slot].currentPosition
+        val d = players[slot].duration
+        if (p > 5_000 && d > 0 && p < d - 8_000) prefs.setPosition(it.uri, p) else prefs.clearPosition(it.uri)
     }
 
-    fun currentIsVideo(): Boolean = queue[order[pos]].isVideo
-
-    fun savePosition() {
-        val cur = queue[order[pos]]
-        if (!cur.isVideo) return
-        val p = player.currentPosition
-        val d = player.duration
-        if (p > 5_000 && d > 0 && p < d - 8_000) prefs.setPosition(cur.uri, p) else prefs.clearPosition(cur.uri)
+    fun loadVideo(slot: Int, page: Int, playNow: Boolean) {
+        val it = itemAt(page)
+        val p = players[slot]
+        val builder = MediaItem.Builder().setUri(Uri.parse(it.uri))
+        val sub = prefs.getSubtitle(it.uri)
+        if (sub != null && sub.contains('|')) {
+            builder.setSubtitleConfigurations(
+                listOf(
+                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.substringBeforeLast('|')))
+                        .setMimeType(sub.substringAfterLast('|'))
+                        .setLanguage("und")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                )
+            )
+        }
+        p.setMediaItem(builder.build(), prefs.getPosition(it.uri))
+        p.prepare()
+        p.setPlaybackSpeed(speed)
+        p.volume = if (muted) 0f else 1f
+        p.playWhenReady = playNow
+        slotPage[slot] = page
     }
 
-    fun go(delta: Int, auto: Boolean) {
+    /** Deja listo el reproductor del elemento actual y precarga el siguiente. */
+    fun activate(page: Int, force: Boolean, forward: Boolean) {
+        val cur = itemAt(page)
+        if (cur.isVideo) {
+            var s = slotPage.indexOf(page)
+            if (s < 0 || force || players[s].playerError != null) {
+                if (s < 0) {
+                    val free = listOf(0, 1).firstOrNull { slotPage[it] != page - 1 && slotPage[it] != page + 1 }
+                    s = free ?: (if (forward) slotPage.indexOf(page - 1) else slotPage.indexOf(page + 1)).coerceAtLeast(0)
+                }
+                loadVideo(s, page, playing)
+            }
+            activeSlot = s
+            players[s].playWhenReady = playing
+            players[1 - s].playWhenReady = false
+        } else {
+            players.forEach { it.playWhenReady = false }
+        }
+        val nb = if (forward) page + 1 else page - 1
+        if (nb in 0 until order.size && itemAt(nb).isVideo && slotPage.indexOf(nb) < 0) {
+            val free = if (cur.isVideo) 1 - activeSlot else activeSlot
+            loadVideo(free, nb, false)
+        }
+    }
+
+    fun advanceAuto() {
         val n = order.size
         if (n == 0) return
-        savePosition()
-        scale = 1f
-        offset = Offset.Zero
-        dir = if (delta >= 0) 1 else -1
-        if (auto && repeat == 2) {
+        if (repeat == 2) {
             tick++
             return
         }
-        val np = pos + delta
-        if (np in 0 until n) {
-            pos = np
-            tick++
-            finished = false
-        } else if (!auto || repeat == 1) {
-            pos = ((np % n) + n) % n
-            tick++
-            finished = false
+        val cur = settled()
+        if (cur + 1 < n) {
+            scope.launch { pagerState.animateScrollToPage(cur + 1) }
+        } else if (repeat == 1) {
+            scope.launch { pagerState.scrollToPage(0) }
         } else {
             playing = false
             finished = true
+        }
+    }
+
+    fun manual(delta: Int) {
+        val n = order.size
+        val target = settled() + delta
+        scope.launch {
+            if (target in 0 until n) pagerState.animateScrollToPage(target)
+            else pagerState.scrollToPage(if (target < 0) n - 1 else 0)
         }
     }
 
@@ -244,16 +285,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             playing = false
             finished = true
         } else {
-            go(1, true)
+            advanceAuto()
         }
     }
 
     fun togglePlay() {
         if (finished) {
-            pos = 0
-            tick++
             finished = false
             playing = true
+            scope.launch { pagerState.scrollToPage(0) }
+            tick++
         } else {
             playing = !playing
         }
@@ -262,116 +303,112 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     fun setShuffleMode(value: Boolean) {
         shuffle = value
         prefs.shuffle = value
-        val (o, p) = buildOrder(queue.size, order[pos], value)
+        val (o, p) = buildOrder(queue.size, order[settled()], value)
         order = o
-        pos = p
+        scope.launch { pagerState.scrollToPage(p) }
     }
 
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED) go(1, true)
-                if (state == Player.STATE_READY) errors = 0
-            }
+    DisposableEffect(Unit) {
+        val listeners = players.mapIndexed { idx, p ->
+            val l = object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (idx != activeSlot) return
+                    if (state == Player.STATE_ENDED) {
+                        prefs.clearPosition(itemAt(settled()).uri)
+                        advanceAuto()
+                    }
+                    if (state == Player.STATE_READY) errors = 0
+                }
 
-            override fun onPlayerError(error: PlaybackException) {
-                onMediaError()
-            }
+                override fun onPlayerError(error: PlaybackException) {
+                    if (idx == activeSlot && currentIsVideo()) onMediaError()
+                }
 
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (reason != Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST && currentIsVideo()) {
-                    playing = playWhenReady
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    if (idx == activeSlot && reason != Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST && currentIsVideo()) {
+                        playing = playWhenReady
+                    }
                 }
             }
+            p.addListener(l)
+            l
         }
-        player.addListener(listener)
         onDispose {
-            savePosition()
-            player.removeListener(listener)
-            player.release()
-        }
-    }
-
-    // Cargar el elemento actual (retomando donde se dejó y con subtítulos guardados)
-    LaunchedEffect(tick) {
-        val current = queue[order[pos]]
-        if (current.isVideo) {
-            val start = prefs.getPosition(current.uri)
-            val builder = MediaItem.Builder().setUri(Uri.parse(current.uri))
-            val sub = prefs.getSubtitle(current.uri)
-            if (sub != null && sub.contains('|')) {
-                val subUri = sub.substringBeforeLast('|')
-                val subMime = sub.substringAfterLast('|')
-                builder.setSubtitleConfigurations(
-                    listOf(
-                        MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUri))
-                            .setMimeType(subMime)
-                            .setLanguage("und")
-                            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                            .build()
-                    )
-                )
+            savePosition(settled(), activeSlot)
+            players.forEachIndexed { i, p ->
+                p.removeListener(listeners[i])
+                p.release()
             }
-            player.setMediaItem(builder.build(), start)
-            player.prepare()
-            player.setPlaybackSpeed(speed)
-            player.playWhenReady = playing
-        } else {
-            player.stop()
-            player.clearMediaItems()
         }
     }
-    LaunchedEffect(playing) {
-        if (currentIsVideo()) player.playWhenReady = playing
-    }
-    LaunchedEffect(speed) { player.setPlaybackSpeed(speed) }
 
-    // Sonido apagado por defecto: sin volumen y sin quitarle el audio a otras apps
+    // Cambio de página (TikTok): guarda la posición anterior, activa la nueva y precarga
+    LaunchedEffect(Unit) {
+        activate(pagerState.settledPage, false, true)
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            if (page != lastSettled) {
+                val prevSlot = slotPage.indexOf(lastSettled)
+                if (prevSlot >= 0) savePosition(lastSettled, prevSlot)
+                val forward = page >= lastSettled
+                lastSettled = page
+                scale = 1f
+                offset = Offset.Zero
+                finished = false
+                activate(page, false, forward)
+            }
+        }
+    }
+    // Repetir el actual / recargar (subtítulos)
+    LaunchedEffect(tick) {
+        if (tick > 0) activate(settled(), true, true)
+    }
+    LaunchedEffect(playing, activeSlot) {
+        if (currentIsVideo()) players[activeSlot].playWhenReady = playing
+    }
+    LaunchedEffect(speed) { players.forEach { it.setPlaybackSpeed(speed) } }
     LaunchedEffect(muted) {
-        player.volume = if (muted) 0f else 1f
-        player.setAudioAttributes(AudioAttributes.DEFAULT, !muted)
+        players.forEach {
+            it.volume = if (muted) 0f else 1f
+            it.setAudioAttributes(AudioAttributes.DEFAULT, !muted)
+        }
     }
 
     // Temporizador de imágenes
-    LaunchedEffect(tick, playing, seconds) {
-        if (!queue[order[pos]].isVideo) {
+    LaunchedEffect(pagerState.settledPage, tick, playing, seconds) {
+        if (!currentIsVideo()) {
             imgProgress.snapTo(0f)
             if (playing) {
                 imgProgress.animateTo(1f, tween(seconds * 1000, easing = LinearEasing))
-                go(1, true)
+                advanceAuto()
             }
         }
     }
 
     // Progreso del video y guardado periódico de la posición
-    LaunchedEffect(tick) {
+    LaunchedEffect(pagerState.settledPage, tick) {
         var counter = 0
-        while (queue[order[pos]].isVideo) {
-            videoPos = player.currentPosition
-            videoDur = player.duration.coerceAtLeast(0L)
+        while (currentIsVideo()) {
+            val p = players[activeSlot]
+            videoPos = p.currentPosition
+            videoDur = p.duration.coerceAtLeast(0L)
             counter++
-            if (counter % 10 == 0 && playing) savePosition()
+            if (counter % 10 == 0 && playing) savePosition(settled(), activeSlot)
             delay(300)
         }
     }
 
-    // Ocultar controles automáticamente
     LaunchedEffect(controlsVisible, playing, touchStamp) {
         if (controlsVisible && playing) {
             delay(3500)
             controlsVisible = false
         }
     }
-
-    // Aviso de salto de ±10 s
     LaunchedEffect(hintStamp) {
         if (hint.isNotEmpty()) {
             delay(700)
             hint = ""
         }
     }
-
-    // Temporizador de apagado
     LaunchedEffect(sleepMinutes) {
         if (sleepMinutes > 0) {
             delay(sleepMinutes * 60_000L)
@@ -381,15 +418,15 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     }
 
     // Imagen en imagen
-    SideEffect { vm.pipReady = playing && item.isVideo }
+    SideEffect { vm.pipReady = playing && currentIsVideo() }
     DisposableEffect(Unit) {
         onDispose { vm.pipReady = false }
     }
 
-    // Reproducción en segundo plano (servicio en primer plano)
-    LaunchedEffect(bgPlayback, playing, item.isVideo) {
+    // Reproducción en segundo plano
+    LaunchedEffect(bgPlayback, playing, pagerState.settledPage) {
         val intent = Intent(context, PlaybackService::class.java)
-        if (bgPlayback && playing && item.isVideo) {
+        if (bgPlayback && playing && currentIsVideo()) {
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: Exception) {
@@ -421,7 +458,6 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
     BackHandler { onClose() }
 
-    // Selectores
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val subtitleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -444,10 +480,142 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 lower.endsWith(".ass") || lower.endsWith(".ssa") -> MimeTypes.TEXT_SSA
                 else -> MimeTypes.APPLICATION_SUBRIP
             }
-            prefs.setSubtitle(queue[order[pos]].uri, "$uri|$mime")
+            prefs.setSubtitle(itemAt(settled()).uri, "$uri|$mime")
             tick++
         }
     }
+
+    // ---- Contenido de cada página ----
+    val pageContent: @Composable (Int) -> Unit = { pg ->
+        val pageItem = itemAt(pg)
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (!pageItem.isVideo) {
+                val request = remember(pageItem.uri) {
+                    ImageRequest.Builder(context)
+                        .data(Uri.parse(pageItem.uri))
+                        .size(2048)
+                        .build()
+                }
+                val zoomMod = if (pg == pagerState.settledPage) {
+                    Modifier.graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    }
+                } else {
+                    Modifier
+                }
+                AsyncImage(
+                    model = request,
+                    contentDescription = pageItem.name,
+                    contentScale = ContentScale.Fit,
+                    colorFilter = composeFilter,
+                    onSuccess = { if (pg == pagerState.settledPage) errors = 0 },
+                    onError = { if (pg == pagerState.settledPage) onMediaError() },
+                    modifier = Modifier.fillMaxSize().then(zoomMod)
+                )
+            } else {
+                val thumb = remember(pageItem.uri) {
+                    ImageRequest.Builder(context)
+                        .data(Uri.parse(pageItem.uri))
+                        .size(1080)
+                        .videoFramePercent(0.1)
+                        .build()
+                }
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    colorFilter = composeFilter,
+                    modifier = Modifier.fillMaxSize()
+                )
+                val s = slotPage.indexOf(pg)
+                if (s >= 0) {
+                    key(s) {
+                        AndroidView(
+                            factory = { c ->
+                                val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
+                                pv.player = players[s]
+                                pv
+                            },
+                            update = { pv ->
+                                val tv = pv.videoSurfaceView as? TextureView
+                                val values = filterType.values
+                                if (tv != null) {
+                                    if (values != null) {
+                                        val paint = Paint()
+                                        paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
+                                        tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+                                    } else {
+                                        tv.setLayerType(View.LAYER_TYPE_NONE, null)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Gestos de la capa del feed: toque, doble toque, pellizco y arrastre con zoom
+    val gestureModifier = Modifier
+        .pointerInput(Unit) {
+            detectTapGestures(
+                onTap = {
+                    controlsVisible = !controlsVisible
+                    touchStamp++
+                },
+                onDoubleTap = { p ->
+                    if (currentIsVideo()) {
+                        val pl = players[activeSlot]
+                        val back = p.x < size.width / 2f
+                        val dur = pl.duration
+                        var target = pl.currentPosition + if (back) -10_000L else 10_000L
+                        if (target < 0L) target = 0L
+                        if (dur > 0 && target > dur) target = dur
+                        pl.seekTo(target)
+                        hint = if (back) "−10 s" else "+10 s"
+                        hintStamp++
+                    } else if (scale > 1.01f) {
+                        scale = 1f
+                        offset = Offset.Zero
+                    } else {
+                        scale = 2.5f
+                        offset = Offset.Zero
+                    }
+                }
+            )
+        }
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                var multi = false
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.changes.count { it.pressed } >= 2) multi = true
+                    if (!currentIsVideo() && (multi || scale > 1.01f)) {
+                        val zoom = event.calculateZoom()
+                        val pan = event.calculatePan()
+                        val newScale = (scale * zoom).coerceIn(1f, 6f)
+                        val maxX = size.width * (newScale - 1f) / 2f
+                        val maxY = size.height * (newScale - 1f) / 2f
+                        scale = newScale
+                        offset = if (newScale <= 1.01f) {
+                            Offset.Zero
+                        } else {
+                            Offset(
+                                (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                (offset.y + pan.y).coerceIn(-maxY, maxY)
+                            )
+                        }
+                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                    }
+                } while (event.changes.any { it.pressed })
+            }
+        }
 
     // ---- UI ----
     Box(
@@ -455,142 +623,27 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (item.isVideo) {
-            AndroidView(
-                factory = { c ->
-                    val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
-                    pv.player = player
-                    pv
-                },
-                update = { pv ->
-                    val tv = pv.videoSurfaceView as? TextureView
-                    val values = filterType.values
-                    if (tv != null) {
-                        if (values != null) {
-                            val paint = Paint()
-                            paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
-                            tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-                        } else {
-                            tv.setLayerType(View.LAYER_TYPE_NONE, null)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+        val scrollEnabled = scale <= 1.01f && !inPip
+        if (verticalFeed) {
+            VerticalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize().then(gestureModifier),
+                beyondViewportPageCount = 1,
+                userScrollEnabled = scrollEnabled,
+                key = { order[it] }
+            ) { pg -> pageContent(pg) }
+        } else {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize().then(gestureModifier),
+                beyondViewportPageCount = 1,
+                userScrollEnabled = scrollEnabled,
+                key = { order[it] }
+            ) { pg -> pageContent(pg) }
         }
 
-        AnimatedContent(
-            targetState = Slide(tick, item),
-            transitionSpec = {
-                when (transition) {
-                    1 -> fadeIn(tween(400)) togetherWith fadeOut(tween(400))
-                    2 -> (slideInHorizontally(tween(350)) { full -> full * dir } + fadeIn(tween(350))) togetherWith
-                        (slideOutHorizontally(tween(350)) { full -> -full * dir } + fadeOut(tween(350)))
-                    else -> EnterTransition.None togetherWith ExitTransition.None
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-            label = "slide"
-        ) { slide ->
-            if (!slide.item.isVideo) {
-                val request = remember(slide.item.uri, slide.tick) {
-                    ImageRequest.Builder(context)
-                        .data(Uri.parse(slide.item.uri))
-                        .size(2048)
-                        .build()
-                }
-                AsyncImage(
-                    model = request,
-                    contentDescription = slide.item.name,
-                    contentScale = ContentScale.Fit,
-                    colorFilter = composeFilter,
-                    onSuccess = { errors = 0 },
-                    onError = { onMediaError() },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offset.x
-                            translationY = offset.y
-                        }
-                )
-            } else {
-                Box(Modifier.fillMaxSize())
-            }
-        }
-
-        // Capa de gestos: toque, doble toque, pellizco para zoom, deslizar para cambiar
-        if (!inPip) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                controlsVisible = !controlsVisible
-                                touchStamp++
-                            },
-                            onDoubleTap = { p ->
-                                if (currentIsVideo()) {
-                                    val back = p.x < size.width / 2f
-                                    val dur = player.duration
-                                    var target = player.currentPosition + if (back) -10_000L else 10_000L
-                                    if (target < 0L) target = 0L
-                                    if (dur > 0 && target > dur) target = dur
-                                    player.seekTo(target)
-                                    hint = if (back) "−10 s" else "+10 s"
-                                    hintStamp++
-                                } else if (scale > 1.01f) {
-                                    scale = 1f
-                                    offset = Offset.Zero
-                                } else {
-                                    scale = 2.5f
-                                    offset = Offset.Zero
-                                }
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            var swipe = 0f
-                            var multi = false
-                            do {
-                                val event = awaitPointerEvent()
-                                if (event.changes.count { it.pressed } >= 2) multi = true
-                                val zoom = event.calculateZoom()
-                                val pan = event.calculatePan()
-                                if (!currentIsVideo() && (multi || scale > 1.01f)) {
-                                    val newScale = (scale * zoom).coerceIn(1f, 6f)
-                                    val maxX = size.width * (newScale - 1f) / 2f
-                                    val maxY = size.height * (newScale - 1f) / 2f
-                                    scale = newScale
-                                    offset = if (newScale <= 1.01f) {
-                                        Offset.Zero
-                                    } else {
-                                        Offset(
-                                            (offset.x + pan.x).coerceIn(-maxX, maxX),
-                                            (offset.y + pan.y).coerceIn(-maxY, maxY)
-                                        )
-                                    }
-                                    if (event.changes.any { it.positionChanged() }) {
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                } else {
-                                    swipe += pan.x
-                                    if (abs(swipe) > viewConfiguration.touchSlop) {
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                }
-                            } while (event.changes.any { it.pressed })
-                            if (!multi && scale <= 1.01f) {
-                                if (swipe < -150f) go(1, false) else if (swipe > 150f) go(-1, false)
-                            }
-                        }
-                    }
-            )
-        }
+        val uiPage = pagerState.currentPage.coerceIn(0, order.size - 1)
+        val item = itemAt(uiPage)
 
         if (hint.isNotEmpty()) {
             Text(
@@ -614,7 +667,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClose) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cerrar", tint = Color.White)
+                    Icon(MixIcons.ArrowBack, contentDescription = "Cerrar", tint = Color.White)
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -625,7 +678,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        text = "${pos + 1}/${order.size}",
+                        text = "${uiPage + 1}/${order.size}",
                         color = Color.White.copy(alpha = 0.8f),
                         style = MaterialTheme.typography.labelSmall
                     )
@@ -637,25 +690,25 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         touchStamp++
                     }) {
                         Icon(
-                            imageVector = if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                            imageVector = if (muted) MixIcons.VolumeOff else MixIcons.VolumeUp,
                             contentDescription = if (muted) "Activar sonido" else "Silenciar",
                             tint = Color.White
                         )
                     }
                     IconButton(onClick = { (context.findActivity() as? MainActivity)?.enterPip() }) {
-                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Imagen en imagen", tint = Color.White)
+                        Icon(MixIcons.PictureInPictureAlt, contentDescription = "Imagen en imagen", tint = Color.White)
                     }
                 }
                 IconButton(onClick = {
                     shareUris(context, listOf(Uri.parse(item.uri)), allImages = !item.isVideo, allVideos = item.isVideo)
                 }) {
-                    Icon(Icons.Default.Share, contentDescription = "Compartir", tint = Color.White)
+                    Icon(MixIcons.Share, contentDescription = "Compartir", tint = Color.White)
                 }
                 IconButton(onClick = {
                     showOptions = true
                     touchStamp++
                 }) {
-                    Icon(Icons.Default.Tune, contentDescription = "Opciones", tint = Color.White)
+                    Icon(MixIcons.Tune, contentDescription = "Opciones", tint = Color.White)
                 }
             }
         }
@@ -675,7 +728,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             value = videoPos.toFloat().coerceIn(0f, maxOf(1f, videoDur.toFloat())),
                             onValueChange = {
                                 videoPos = it.toLong()
-                                player.seekTo(it.toLong())
+                                players[activeSlot].seekTo(it.toLong())
                                 touchStamp++
                             },
                             valueRange = 0f..maxOf(1f, videoDur.toFloat()),
@@ -700,16 +753,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         touchStamp++
                     }) {
                         Icon(
-                            Icons.Default.Shuffle,
+                            MixIcons.Shuffle,
                             contentDescription = "Aleatorio",
                             tint = if (shuffle) MaterialTheme.colorScheme.primary else Color.White
                         )
                     }
                     IconButton(onClick = {
-                        go(-1, false)
+                        manual(-1)
                         touchStamp++
                     }) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Anterior", tint = Color.White, modifier = Modifier.size(32.dp))
+                        Icon(MixIcons.SkipPrevious, contentDescription = "Anterior", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
                     IconButton(onClick = {
                         togglePlay()
@@ -717,9 +770,9 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     }, modifier = Modifier.size(64.dp)) {
                         Icon(
                             imageVector = when {
-                                finished -> Icons.Default.Replay
-                                playing -> Icons.Default.Pause
-                                else -> Icons.Default.PlayArrow
+                                finished -> MixIcons.Replay
+                                playing -> MixIcons.Pause
+                                else -> MixIcons.PlayArrow
                             },
                             contentDescription = "Reproducir / pausar",
                             tint = Color.White,
@@ -727,10 +780,10 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         )
                     }
                     IconButton(onClick = {
-                        go(1, false)
+                        manual(1)
                         touchStamp++
                     }) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Siguiente", tint = Color.White, modifier = Modifier.size(32.dp))
+                        Icon(MixIcons.SkipNext, contentDescription = "Siguiente", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
                     IconButton(onClick = {
                         repeat = (repeat + 1) % 3
@@ -738,7 +791,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         touchStamp++
                     }) {
                         Icon(
-                            imageVector = if (repeat == 2) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            imageVector = if (repeat == 2) MixIcons.RepeatOne else MixIcons.Repeat,
                             contentDescription = "Repetir",
                             tint = if (repeat == 0) Color.White else MaterialTheme.colorScheme.primary
                         )
@@ -769,6 +822,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     }
                 )
                 ChipRow(
+                    title = "Deslizar para cambiar",
+                    options = listOf(true, false),
+                    selected = verticalFeed,
+                    label = { if (it) "Vertical" else "Horizontal" },
+                    onSelect = {
+                        verticalFeed = it
+                        prefs.feedVertical = it
+                    }
+                )
+                ChipRow(
                     title = "Duración de cada imagen",
                     options = listOf(2, 3, 5, 8, 10, 15, 30, 60),
                     selected = seconds,
@@ -776,16 +839,6 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     onSelect = {
                         seconds = it
                         prefs.imageSeconds = it
-                    }
-                )
-                ChipRow(
-                    title = "Transición entre imágenes",
-                    options = listOf(0, 1, 2),
-                    selected = transition,
-                    label = { if (it == 0) "Ninguna" else if (it == 1) "Fundido" else "Deslizar" },
-                    onSelect = {
-                        transition = it
-                        prefs.transition = it
                     }
                 )
                 ChipRow(
@@ -825,15 +878,15 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         }
                     )
                 }
-                if (item.isVideo) {
+                if (itemAt(settled()).isVideo) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {
                             showOptions = false
                             subtitleLauncher.launch(arrayOf("*/*"))
                         }) { Text("Cargar subtítulos") }
-                        if (prefs.getSubtitle(item.uri) != null) {
+                        if (prefs.getSubtitle(itemAt(settled()).uri) != null) {
                             OutlinedButton(onClick = {
-                                prefs.setSubtitle(item.uri, null)
+                                prefs.setSubtitle(itemAt(settled()).uri, null)
                                 showOptions = false
                                 tick++
                             }) { Text("Quitar subtítulos") }

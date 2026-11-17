@@ -4,16 +4,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,7 +41,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun PlaylistsScreen(
     vm: MixViewModel,
-    onBack: () -> Unit,
     onOpen: (Long) -> Unit,
     onPlay: () -> Unit
 ) {
@@ -84,16 +78,11 @@ fun PlaylistsScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("Listas de reproducción") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
-                    }
-                },
+                title = { Text("Listas", style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     Box {
                         IconButton(onClick = { topMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Más opciones")
+                            Icon(MixIcons.MoreVert, contentDescription = "Más opciones")
                         }
                         DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
                             DropdownMenuItem(
@@ -124,8 +113,11 @@ fun PlaylistsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreate = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Nueva lista")
+            FloatingActionButton(
+                onClick = { showCreate = true },
+                modifier = Modifier.padding(bottom = LocalNavInset.current)
+            ) {
+                Icon(MixIcons.Add, contentDescription = "Nueva lista")
             }
         }
     ) { padding ->
@@ -138,7 +130,10 @@ fun PlaylistsScreen(
                 )
             }
         } else {
-            LazyColumn(Modifier.padding(padding).fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.padding(padding).fillMaxSize(),
+                contentPadding = PaddingValues(bottom = LocalNavInset.current + 8.dp)
+            ) {
                 if (smartLists.isNotEmpty()) {
                     item {
                         Text(
@@ -153,11 +148,11 @@ fun PlaylistsScreen(
                         ListItem(
                             headlineContent = { Text(s.name) },
                             supportingContent = { Text("${vm.smartMedia(s).size} archivos · se actualiza sola") },
-                            leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null) },
+                            leadingContent = { Icon(MixIcons.AutoAwesome, contentDescription = null) },
                             trailingContent = {
                                 Box {
                                     IconButton(onClick = { menu = true }) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = "Opciones")
+                                        Icon(MixIcons.MoreVert, contentDescription = "Opciones")
                                     }
                                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                         DropdownMenuItem(
@@ -203,11 +198,11 @@ fun PlaylistsScreen(
                         ListItem(
                             headlineContent = { Text(p.playlist.name) },
                             supportingContent = { Text("${p.itemCount} elementos") },
-                            leadingContent = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
+                            leadingContent = { Icon(MixIcons.QueueMusic, contentDescription = null) },
                             trailingContent = {
                                 Box {
                                     IconButton(onClick = { menu = true }) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = "Opciones")
+                                        Icon(MixIcons.MoreVert, contentDescription = "Opciones")
                                     }
                                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                         DropdownMenuItem(

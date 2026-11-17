@@ -14,7 +14,10 @@ data class MediaFile(
     val folderId: String = "",
     val width: Int = 0,
     val height: Int = 0,
-    val isExtra: Boolean = false
+    val isExtra: Boolean = false,
+    /** Fecha en que se tomó (ms). Si realDate es false, es solo la fecha de modificación. */
+    val dateTaken: Long = 0L,
+    val realDate: Boolean = false
 ) {
     val key: String = uri.toString()
     fun toQueueItem() = QueueItem(key, name, isVideo, durationMs)
