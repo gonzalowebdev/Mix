@@ -215,6 +215,31 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         playQueue(memory.files.map { it.toQueueItem() }, 0)
     }
 
+    // ---------- Archivos eliminados ----------
+    /** Limpia favoritos, listas, cola y biblioteca cuando se mueven a la papelera o se eliminan. */
+    fun onFilesRemoved(uris: List<Uri>) {
+        val keys = uris.map { it.toString() }.toSet()
+        allMedia = allMedia.filter { it.key !in keys }
+        selected.removeAll { it in keys }
+        if (favorites.any { it in keys }) {
+            favorites = favorites - keys
+            prefs.favorites = favorites
+        }
+        queue = queue.filter { it.uri !in keys }
+        keys.forEach { prefs.clearPosition(it) }
+        viewModelScope.launch {
+            keys.toList().chunked(500).forEach { dao.deleteItemsByUri(it) }
+        }
+        refresh()
+    }
+
+    fun mediaFor(uri: String): MediaFile? = allMedia.firstOrNull { it.key == uri }
+
+    fun toggleFavoriteKey(key: String) {
+        favorites = if (key in favorites) favorites - key else favorites + key
+        prefs.favorites = favorites
+    }
+
     // ---------- Favoritos ----------
     fun toggleFavorite(files: List<MediaFile>) {
         val keys = files.map { it.key }.toSet()
@@ -243,6 +268,8 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     /** Los marca la pantalla del reproductor / la actividad para imagen en imagen. */
     var pipReady by mutableStateOf(false)
     var inPip by mutableStateOf(false)
+    var pipPlaying by mutableStateOf(true)
+    var pipToggleCount by mutableIntStateOf(0)
 
     fun playQueue(items: List<QueueItem>, start: Int) {
         queue = items

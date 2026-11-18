@@ -84,6 +84,9 @@ abstract class PlaylistDao {
     @Query("DELETE FROM playlists WHERE id = :id")
     abstract suspend fun deletePlaylist(id: Long)
 
+    @Query("DELETE FROM playlist_items WHERE uri IN (:uris)")
+    abstract suspend fun deleteItemsByUri(uris: List<String>)
+
     @Query("DELETE FROM playlist_items WHERE id = :id")
     abstract suspend fun deleteItem(id: Long)
 

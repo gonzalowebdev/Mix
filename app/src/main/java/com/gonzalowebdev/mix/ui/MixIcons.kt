@@ -157,6 +157,20 @@ object MixIcons {
             line("M5 7H19M10 7V5H14V7M7 7L8 19H16L17 7M10.5 10.5V16M13.5 10.5V16")
         }
     }
+    val Info: ImageVector by lazy {
+        icon("Info") {
+            line(circle(12f, 12f, 9f))
+            line("M12 11V16.5")
+            line("M12 7.8V7.9", width = 2.4f)
+        }
+    }
+    val ScreenRotation: ImageVector by lazy {
+        icon("ScreenRotation") {
+            line(rr(4f, 10f, 16f, 10f, 2f))
+            line("M8.5 6.4C9.5 5 11 4.2 12.6 4.2C15 4.2 17.1 5.8 17.9 8")
+            line("M18 4.4V8.2H14.2")
+        }
+    }
     val DragHandle: ImageVector by lazy { icon("DragHandle") { line("M5 9H19M5 15H19") } }
     val Tune: ImageVector by lazy {
         icon("Tune") {

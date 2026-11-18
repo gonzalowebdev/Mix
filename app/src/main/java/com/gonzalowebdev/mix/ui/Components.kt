@@ -4,6 +4,13 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.os.Build
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalContext
 import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -153,4 +160,83 @@ fun shareUris(context: Context, uris: List<Uri>, allImages: Boolean, allVideos: 
     }
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     context.startActivity(Intent.createChooser(intent, "Compartir"))
+}
+
+/**
+ * Diálogo de eliminación: la papelera es la opción principal (se puede recuperar);
+ * eliminar definitivamente queda como segunda opción.
+ */
+@Composable
+fun DeleteDialog(
+    count: Int,
+    name: String?,
+    onTrash: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val what = if (count == 1 && name != null) "\"$name\"" else "$count archivos"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (count == 1) "Eliminar archivo" else "Eliminar archivos") },
+        text = {
+            Column {
+                Text(
+                    "¿Qué querés hacer con $what?\n\n" +
+                        "En la papelera se conserva unos 30 días y podés recuperarlo desde la Galería o el " +
+                        "administrador de archivos.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                TextButton(onClick = onDelete) {
+                    Text("Eliminar definitivamente", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onTrash) { Text("Mover a la papelera") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+}
+
+/**
+ * Devuelve una función (uris, definitivo) que pide al sistema mover a la papelera
+ * o eliminar. Devuelve false si ninguno de los archivos se puede eliminar desde Mix.
+ */
+@Composable
+fun rememberFileRemover(onResult: (List<Uri>, Boolean) -> Unit): (List<Uri>, Boolean) -> Boolean {
+    val context = LocalContext.current
+    val callback by rememberUpdatedState(onResult)
+    var pending by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        val uris = pending
+        pending = emptyList()
+        callback(uris, result.resultCode == Activity.RESULT_OK)
+    }
+    return remember(launcher) {
+        { uris: List<Uri>, permanent: Boolean ->
+            val media = uris.filter { it.authority == MediaStore.AUTHORITY }
+            if (media.isEmpty()) {
+                false
+            } else {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    pending = media
+                    val sender = if (permanent) {
+                        MediaStore.createDeleteRequest(context.contentResolver, media).intentSender
+                    } else {
+                        MediaStore.createTrashRequest(context.contentResolver, media, true).intentSender
+                    }
+                    launcher.launch(IntentSenderRequest.Builder(sender).build())
+                } else {
+                    var ok = true
+                    for (u in media) {
+                        try {
+                            context.contentResolver.delete(u, null, null)
+                        } catch (e: Exception) {
+                            ok = false
+                        }
+                    }
+                    callback(media, ok)
+                }
+                true
+            }
+        }
+    }
 }

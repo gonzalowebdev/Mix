@@ -42,6 +42,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("feedVertical", true)
         set(v) = sp.edit().putBoolean("feedVertical", v).apply()
 
+    /** Modo feed: sin avance automático; los videos se repiten en bucle */
+    var feedMode: Boolean
+        get() = sp.getBoolean("feedMode", false)
+        set(v) = sp.edit().putBoolean("feedMode", v).apply()
+
+    /** Movimiento lento en las imágenes de la presentación (apagado por defecto) */
+    var kenBurns: Boolean
+        get() = sp.getBoolean("kenBurns", false)
+        set(v) = sp.edit().putBoolean("kenBurns", v).apply()
+
     var muted: Boolean
         get() = sp.getBoolean("muted", true)
         set(v) = sp.edit().putBoolean("muted", v).apply()

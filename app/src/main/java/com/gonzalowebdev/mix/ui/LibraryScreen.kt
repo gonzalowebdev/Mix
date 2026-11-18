@@ -161,35 +161,11 @@ fun LibraryScreen(
         }
     }
 
-    // Eliminar archivos de la galería
-    val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+    // Eliminar: papelera del sistema (o definitivo), siempre con confirmación
+    val remover = rememberFileRemover { uris, ok ->
+        if (ok) {
+            vm.onFilesRemoved(uris)
             vm.clearSelection()
-            vm.refresh()
-        }
-    }
-
-    fun deleteSelected() {
-        val uris = vm.selectedFiles.filter { it.uri.authority == MediaStore.AUTHORITY }.map { it.uri }
-        if (uris.isEmpty()) {
-            scope.launch { snackbar.showSnackbar("Solo se pueden eliminar archivos de la galería") }
-            return
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            val sender = MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender
-            deleteLauncher.launch(IntentSenderRequest.Builder(sender).build())
-        } else {
-            var failed = false
-            for (u in uris) {
-                try {
-                    context.contentResolver.delete(u, null, null)
-                } catch (e: Exception) {
-                    failed = true
-                }
-            }
-            vm.clearSelection()
-            vm.refresh()
-            if (failed) scope.launch { snackbar.showSnackbar("No se pudieron eliminar algunos archivos") }
         }
     }
 
@@ -256,7 +232,7 @@ fun LibraryScreen(
                                     )
                                 }
                                 DropdownMenuItem(
-                                    text = { Text("Eliminar del dispositivo") },
+                                    text = { Text("Eliminar…") },
                                     onClick = {
                                         selMenu = false
                                         confirmDelete = true
@@ -399,13 +375,21 @@ fun LibraryScreen(
     }
 
     if (confirmDelete) {
-        ConfirmDialog(
-            title = "Eliminar archivos",
-            message = "Se van a eliminar ${vm.selectedFiles.size} archivos del dispositivo. Esta acción no se puede deshacer.",
-            confirmLabel = "Eliminar",
-            onConfirm = {
+        val files = vm.selectedFiles
+        DeleteDialog(
+            count = files.size,
+            name = files.firstOrNull()?.name,
+            onTrash = {
                 confirmDelete = false
-                deleteSelected()
+                if (!remover(files.map { it.uri }, false)) {
+                    scope.launch { snackbar.showSnackbar("Solo se pueden eliminar archivos de la galería") }
+                }
+            },
+            onDelete = {
+                confirmDelete = false
+                if (!remover(files.map { it.uri }, true)) {
+                    scope.launch { snackbar.showSnackbar("Solo se pueden eliminar archivos de la galería") }
+                }
             },
             onDismiss = { confirmDelete = false }
         )

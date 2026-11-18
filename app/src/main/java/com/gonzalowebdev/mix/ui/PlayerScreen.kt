@@ -2,27 +2,40 @@ package com.gonzalowebdev.mix.ui
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.net.Uri
 import android.os.Build
+import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.text.format.Formatter
 import android.view.LayoutInflater
 import android.view.TextureView
 import android.view.View
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.splineBasedDecay
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -40,12 +53,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -61,6 +75,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -74,18 +89,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -94,6 +116,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -109,8 +132,15 @@ import com.gonzalowebdev.mix.MainActivity
 import com.gonzalowebdev.mix.PlaybackService
 import com.gonzalowebdev.mix.R
 import com.gonzalowebdev.mix.data.ColorFilterType
+import com.gonzalowebdev.mix.data.MediaFile
+import com.gonzalowebdev.mix.data.QueueItem
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.abs
 import android.graphics.ColorMatrix as AndroidColorMatrix
 import androidx.compose.ui.graphics.ColorMatrix as ComposeColorMatrix
 
@@ -121,10 +151,17 @@ private fun buildOrder(n: Int, current: Int, shuffle: Boolean): Pair<List<Int>, 
         (listOf(current) + (0 until n).filter { it != current }.shuffled()) to 0
     }
 
+/** Aplica resistencia cuando el valor se pasa de los límites (efecto elástico). */
+private fun soft(v: Float, lo: Float, hi: Float): Float = when {
+    v < lo -> lo + (v - lo) * 0.35f
+    v > hi -> hi + (v - hi) * 0.35f
+    else -> v
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
-    val queue = vm.queue
+    var queue by remember { mutableStateOf(vm.queue) }
     if (queue.isEmpty()) {
         LaunchedEffect(Unit) { onClose() }
         return
@@ -132,9 +169,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
     val context = LocalContext.current
     val view = LocalView.current
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
     val prefs = vm.prefs
     val scope = rememberCoroutineScope()
     val inPip = vm.inPip
+    val playlists by vm.playlists.collectAsStateWithLifecycle()
+    val favorites = vm.favorites
 
     // ---- Estado ----
     val initial = remember { buildOrder(queue.size, vm.startIndex.coerceIn(0, queue.size - 1), prefs.shuffle) }
@@ -149,6 +190,8 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var seconds by remember { mutableIntStateOf(prefs.imageSeconds) }
     var speed by remember { mutableFloatStateOf(prefs.speed) }
     var verticalFeed by remember { mutableStateOf(prefs.feedVertical) }
+    var feedMode by remember { mutableStateOf(prefs.feedMode) }
+    var kenBurns by remember { mutableStateOf(prefs.kenBurns) }
     var filterType by remember {
         mutableStateOf(
             try {
@@ -167,12 +210,27 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var videoPos by remember { mutableLongStateOf(0L) }
     var videoDur by remember { mutableLongStateOf(0L) }
     var showOptions by remember { mutableStateOf(false) }
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    var showInfo by remember { mutableStateOf(false) }
+    var showAddList by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var forcedLandscape by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf("") }
     var hintStamp by remember { mutableIntStateOf(0) }
+    var speedBoost by remember { mutableStateOf(false) }
+    var scrubbing by remember { mutableStateOf(false) }
+    var scrubText by remember { mutableStateOf("") }
+
+    // Zoom
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    var zoomJob by remember { mutableStateOf<Job?>(null) }
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    val zoomed by remember { derivedStateOf { scale > 1.05f } }
+    val zoomLocked by remember { derivedStateOf { scale > 1.01f } }
 
     val imgProgress = remember { Animatable(0f) }
+    var progressKey by remember { mutableLongStateOf(-1L) }
     val composeFilter = remember(filterType) {
         filterType.values?.let { ColorFilter.colorMatrix(ComposeColorMatrix(it)) }
     }
@@ -187,7 +245,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 .build()
         }
     }
-    val slotPage = remember { mutableStateListOf(-1, -1) }
+    val slotUri = remember { mutableStateListOf("", "") }
     var activeSlot by remember { mutableIntStateOf(0) }
     var lastSettled by remember { mutableIntStateOf(pagerState.settledPage) }
 
@@ -196,18 +254,18 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     fun currentIsVideo(): Boolean = itemAt(settled()).isVideo
 
     fun savePosition(page: Int, slot: Int) {
-        val it = itemAt(page)
-        if (!it.isVideo) return
+        val target = itemAt(page)
+        if (!target.isVideo) return
         val p = players[slot].currentPosition
         val d = players[slot].duration
-        if (p > 5_000 && d > 0 && p < d - 8_000) prefs.setPosition(it.uri, p) else prefs.clearPosition(it.uri)
+        if (p > 5_000 && d > 0 && p < d - 8_000) prefs.setPosition(target.uri, p) else prefs.clearPosition(target.uri)
     }
 
     fun loadVideo(slot: Int, page: Int, playNow: Boolean) {
-        val it = itemAt(page)
+        val target = itemAt(page)
         val p = players[slot]
-        val builder = MediaItem.Builder().setUri(Uri.parse(it.uri))
-        val sub = prefs.getSubtitle(it.uri)
+        val builder = MediaItem.Builder().setUri(Uri.parse(target.uri))
+        val sub = prefs.getSubtitle(target.uri)
         if (sub != null && sub.contains('|')) {
             builder.setSubtitleConfigurations(
                 listOf(
@@ -219,23 +277,28 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 )
             )
         }
-        p.setMediaItem(builder.build(), prefs.getPosition(it.uri))
+        p.setMediaItem(builder.build(), prefs.getPosition(target.uri))
+        p.repeatMode = if (feedMode) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         p.prepare()
         p.setPlaybackSpeed(speed)
         p.volume = if (muted) 0f else 1f
         p.playWhenReady = playNow
-        slotPage[slot] = page
+        slotUri[slot] = target.uri
     }
 
     /** Deja listo el reproductor del elemento actual y precarga el siguiente. */
     fun activate(page: Int, force: Boolean, forward: Boolean) {
         val cur = itemAt(page)
         if (cur.isVideo) {
-            var s = slotPage.indexOf(page)
+            var s = slotUri.indexOf(cur.uri)
             if (s < 0 || force || players[s].playerError != null) {
                 if (s < 0) {
-                    val free = listOf(0, 1).firstOrNull { slotPage[it] != page - 1 && slotPage[it] != page + 1 }
-                    s = free ?: (if (forward) slotPage.indexOf(page - 1) else slotPage.indexOf(page + 1)).coerceAtLeast(0)
+                    val prevUri = if (page - 1 >= 0) itemAt(page - 1).uri else ""
+                    val nextUri = if (page + 1 < order.size) itemAt(page + 1).uri else ""
+                    val free = listOf(0, 1).firstOrNull {
+                        (prevUri.isEmpty() || slotUri[it] != prevUri) && (nextUri.isEmpty() || slotUri[it] != nextUri)
+                    }
+                    s = free ?: (if (forward) slotUri.indexOf(prevUri) else slotUri.indexOf(nextUri)).coerceAtLeast(0)
                 }
                 loadVideo(s, page, playing)
             }
@@ -246,7 +309,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             players.forEach { it.playWhenReady = false }
         }
         val nb = if (forward) page + 1 else page - 1
-        if (nb in 0 until order.size && itemAt(nb).isVideo && slotPage.indexOf(nb) < 0) {
+        if (nb in 0 until order.size && itemAt(nb).isVideo && slotUri.indexOf(itemAt(nb).uri) < 0) {
             val free = if (cur.isVideo) 1 - activeSlot else activeSlot
             loadVideo(free, nb, false)
         }
@@ -254,7 +317,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
     fun advanceAuto() {
         val n = order.size
-        if (n == 0) return
+        if (n == 0 || feedMode) return
         if (repeat == 2) {
             tick++
             return
@@ -270,22 +333,14 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         }
     }
 
-    fun manual(delta: Int) {
-        val n = order.size
-        val target = settled() + delta
-        scope.launch {
-            if (target in 0 until n) pagerState.animateScrollToPage(target)
-            else pagerState.scrollToPage(if (target < 0) n - 1 else 0)
-        }
-    }
-
     fun onMediaError() {
         errors++
         if (errors > order.size) {
             playing = false
             finished = true
         } else {
-            advanceAuto()
+            val cur = settled()
+            if (cur + 1 < order.size) scope.launch { pagerState.animateScrollToPage(cur + 1) } else advanceAuto()
         }
     }
 
@@ -306,6 +361,97 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         val (o, p) = buildOrder(queue.size, order[settled()], value)
         order = o
         scope.launch { pagerState.scrollToPage(p) }
+    }
+
+    /** Quita un archivo (eliminado) del feed sin romper el deslizamiento. */
+    fun removeFromFeed(uri: String) {
+        val idx = queue.indexOfFirst { it.uri == uri }
+        if (idx < 0) return
+        players.forEach {
+            it.stop()
+            it.clearMediaItems()
+        }
+        slotUri[0] = ""
+        slotUri[1] = ""
+        val newQueue = queue.filterIndexed { i, _ -> i != idx }
+        if (newQueue.isEmpty()) {
+            onClose()
+            return
+        }
+        order = order.filter { it != idx }.map { if (it > idx) it - 1 else it }
+        queue = newQueue
+        scale = 1f
+        offset = Offset.Zero
+        tick++
+    }
+
+    // ---- Zoom suave ----
+    fun boundsFor(s: Float): Offset = Offset(
+        viewSize.width * maxOf(s - 1f, 0f) / 2f,
+        viewSize.height * maxOf(s - 1f, 0f) / 2f
+    )
+
+    fun clampOffset(o: Offset, s: Float): Offset {
+        val b = boundsFor(s)
+        return Offset(o.x.coerceIn(-b.x, b.x), o.y.coerceIn(-b.y, b.y))
+    }
+
+    suspend fun zoomAnim(targetScale: Float, targetOffset: Offset, spec: AnimationSpec<Float>) {
+        val s0 = scale
+        val o0 = offset
+        Animatable(0f).animateTo(1f, spec) {
+            val t = value
+            scale = s0 + (targetScale - s0) * t
+            offset = Offset(o0.x + (targetOffset.x - o0.x) * t, o0.y + (targetOffset.y - o0.y) * t)
+        }
+    }
+
+    fun settleZoom(velocity: Offset) {
+        zoomJob?.cancel()
+        zoomJob = scope.launch {
+            val s = scale
+            if (s <= 1.02f) {
+                zoomAnim(1f, Offset.Zero, spring(stiffness = Spring.StiffnessMedium))
+            } else {
+                val clamped = clampOffset(offset, s)
+                if (clamped != offset) {
+                    zoomAnim(s, clamped, spring(stiffness = Spring.StiffnessMedium))
+                } else if (abs(velocity.x) > 150f || abs(velocity.y) > 150f) {
+                    val start = offset
+                    val b = boundsFor(s)
+                    Animatable(Offset.Zero, Offset.VectorConverter)
+                        .animateDecay(velocity, splineBasedDecay<Offset>(density)) {
+                            offset = Offset(
+                                (start.x + value.x).coerceIn(-b.x, b.x),
+                                (start.y + value.y).coerceIn(-b.y, b.y)
+                            )
+                        }
+                }
+            }
+        }
+    }
+
+    fun resetZoom() {
+        zoomJob?.cancel()
+        zoomJob = scope.launch { zoomAnim(1f, Offset.Zero, tween(260, easing = FastOutSlowInEasing)) }
+    }
+
+    fun toggleRotation() {
+        val act = context.findActivity() ?: return
+        forcedLandscape = !forcedLandscape
+        act.requestedOrientation = if (forcedLandscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Eliminar (papelera del sistema o definitivo) y limpiar el feed
+    val remover = rememberFileRemover { uris, ok ->
+        if (ok) {
+            vm.onFilesRemoved(uris)
+            uris.forEach { removeFromFeed(it.toString()) }
+        }
     }
 
     DisposableEffect(Unit) {
@@ -342,15 +488,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         }
     }
 
-    // Cambio de página (TikTok): guarda la posición anterior, activa la nueva y precarga
+    // Cambio de página (como TikTok): guarda la posición anterior, activa la nueva y precarga
     LaunchedEffect(Unit) {
         activate(pagerState.settledPage, false, true)
         snapshotFlow { pagerState.settledPage }.collect { page ->
             if (page != lastSettled) {
-                val prevSlot = slotPage.indexOf(lastSettled)
+                val prevSlot = slotUri.indexOf(itemAt(lastSettled).uri)
                 if (prevSlot >= 0) savePosition(lastSettled, prevSlot)
                 val forward = page >= lastSettled
                 lastSettled = page
+                zoomJob?.cancel()
                 scale = 1f
                 offset = Offset.Zero
                 finished = false
@@ -358,7 +505,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             }
         }
     }
-    // Repetir el actual / recargar (subtítulos)
+    // Repetir el actual / recargar (subtítulos, archivo eliminado)
     LaunchedEffect(tick) {
         if (tick > 0) activate(settled(), true, true)
     }
@@ -372,13 +519,24 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             it.setAudioAttributes(AudioAttributes.DEFAULT, !muted)
         }
     }
+    LaunchedEffect(feedMode) {
+        players.forEach { it.repeatMode = if (feedMode) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF }
+    }
 
-    // Temporizador de imágenes
-    LaunchedEffect(pagerState.settledPage, tick, playing, seconds) {
+    // Temporizador de imágenes (se pausa sin reiniciarse; no corre en modo feed)
+    LaunchedEffect(pagerState.settledPage, tick, playing, seconds, feedMode) {
         if (!currentIsVideo()) {
-            imgProgress.snapTo(0f)
-            if (playing) {
-                imgProgress.animateTo(1f, tween(seconds * 1000, easing = LinearEasing))
+            val key = pagerState.settledPage * 100_000L + tick
+            if (key != progressKey) {
+                imgProgress.snapTo(0f)
+                progressKey = key
+            }
+            if (playing && !feedMode) {
+                val remaining = (1f - imgProgress.value).coerceIn(0f, 1f)
+                imgProgress.animateTo(
+                    1f,
+                    tween(maxOf(1, (seconds * 1000 * remaining).toInt()), easing = LinearEasing)
+                )
                 advanceAuto()
             }
         }
@@ -417,10 +575,23 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         }
     }
 
-    // Imagen en imagen
-    SideEffect { vm.pipReady = playing && currentIsVideo() }
+    // Imagen en imagen (con botón de pausa en la ventana flotante)
+    SideEffect {
+        vm.pipReady = playing && currentIsVideo()
+        vm.pipPlaying = playing
+    }
     DisposableEffect(Unit) {
         onDispose { vm.pipReady = false }
+    }
+    var pipHandled by remember { mutableIntStateOf(vm.pipToggleCount) }
+    LaunchedEffect(vm.pipToggleCount) {
+        if (vm.pipToggleCount != pipHandled) {
+            pipHandled = vm.pipToggleCount
+            togglePlay()
+        }
+    }
+    LaunchedEffect(playing, inPip) {
+        if (inPip) (context.findActivity() as? MainActivity)?.updatePipActions(playing)
     }
 
     // Reproducción en segundo plano
@@ -440,16 +611,17 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         onDispose { context.stopService(Intent(context, PlaybackService::class.java)) }
     }
 
-    // Pantalla completa y pantalla encendida
+    // Pantalla completa, pantalla encendida y orientación
     DisposableEffect(Unit) {
-        val window = context.findActivity()?.window
-        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        val act = context.findActivity()
+        val controller = act?.window?.let { WindowCompat.getInsetsController(it, view) }
         controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller?.hide(WindowInsetsCompat.Type.systemBars())
         view.keepScreenOn = true
         onDispose {
             controller?.show(WindowInsetsCompat.Type.systemBars())
             view.keepScreenOn = false
+            act?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
@@ -488,82 +660,113 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     // ---- Contenido de cada página ----
     val pageContent: @Composable (Int) -> Unit = { pg ->
         val pageItem = itemAt(pg)
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            if (!pageItem.isVideo) {
-                val request = remember(pageItem.uri) {
-                    ImageRequest.Builder(context)
-                        .data(Uri.parse(pageItem.uri))
-                        .size(2048)
-                        .build()
-                }
-                val zoomMod = if (pg == pagerState.settledPage) {
-                    Modifier.graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
+        val isSettled = pg == pagerState.settledPage
+        val kbActive = kenBurns && !feedMode && isSettled && !pageItem.isVideo
+        val variant = abs(pageItem.uri.hashCode()) % 3
+        val kbDx = when (variant) {
+            1 -> -0.03f
+            2 -> 0.03f
+            else -> 0f
+        }
+        val kbDy = if (variant == 0) -0.02f else 0f
+        val layerMod = if (isSettled) {
+            Modifier.graphicsLayer {
+                val p = if (kbActive && scale <= 1.01f) imgProgress.value else 0f
+                val ks = 1f + 0.08f * p
+                scaleX = scale * ks
+                scaleY = scale * ks
+                translationX = offset.x + kbDx * p * size.width
+                translationY = offset.y + kbDy * p * size.height
+            }
+        } else {
+            Modifier
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black).clipToBounds()) {
+            Box(Modifier.fillMaxSize().then(layerMod)) {
+                if (!pageItem.isVideo) {
+                    val request = remember(pageItem.uri) {
+                        ImageRequest.Builder(context)
+                            .data(Uri.parse(pageItem.uri))
+                            .size(2048)
+                            .build()
                     }
+                    AsyncImage(
+                        model = request,
+                        contentDescription = pageItem.name,
+                        contentScale = ContentScale.Fit,
+                        colorFilter = composeFilter,
+                        onSuccess = { if (isSettled) errors = 0 },
+                        onError = { if (isSettled) onMediaError() },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
-                    Modifier
-                }
-                AsyncImage(
-                    model = request,
-                    contentDescription = pageItem.name,
-                    contentScale = ContentScale.Fit,
-                    colorFilter = composeFilter,
-                    onSuccess = { if (pg == pagerState.settledPage) errors = 0 },
-                    onError = { if (pg == pagerState.settledPage) onMediaError() },
-                    modifier = Modifier.fillMaxSize().then(zoomMod)
-                )
-            } else {
-                val thumb = remember(pageItem.uri) {
-                    ImageRequest.Builder(context)
-                        .data(Uri.parse(pageItem.uri))
-                        .size(1080)
-                        .videoFramePercent(0.1)
-                        .build()
-                }
-                AsyncImage(
-                    model = thumb,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    colorFilter = composeFilter,
-                    modifier = Modifier.fillMaxSize()
-                )
-                val s = slotPage.indexOf(pg)
-                if (s >= 0) {
-                    key(s) {
-                        AndroidView(
-                            factory = { c ->
-                                val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
-                                pv.player = players[s]
-                                pv
-                            },
-                            update = { pv ->
-                                val tv = pv.videoSurfaceView as? TextureView
-                                val values = filterType.values
-                                if (tv != null) {
-                                    if (values != null) {
-                                        val paint = Paint()
-                                        paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
-                                        tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-                                    } else {
-                                        tv.setLayerType(View.LAYER_TYPE_NONE, null)
+                    val thumb = remember(pageItem.uri) {
+                        ImageRequest.Builder(context)
+                            .data(Uri.parse(pageItem.uri))
+                            .size(1080)
+                            .videoFramePercent(0.1)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = thumb,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        colorFilter = composeFilter,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    val s = slotUri.indexOf(pageItem.uri)
+                    if (s >= 0) {
+                        key(s) {
+                            AndroidView(
+                                factory = { c ->
+                                    val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
+                                    pv.player = players[s]
+                                    pv
+                                },
+                                update = { pv ->
+                                    val tv = pv.videoSurfaceView as? TextureView
+                                    val values = filterType.values
+                                    if (tv != null) {
+                                        if (values != null) {
+                                            val paint = Paint()
+                                            paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
+                                            tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+                                        } else {
+                                            tv.setLayerType(View.LAYER_TYPE_NONE, null)
+                                        }
                                     }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    // Gestos de la capa del feed: toque, doble toque, pellizco y arrastre con zoom
+    // Gestos: toque, doble toque, mantener (2x), arrastre horizontal (adelantar) y zoom
     val gestureModifier = Modifier
+        .onSizeChanged { viewSize = it }
         .pointerInput(Unit) {
             detectTapGestures(
+                onPress = {
+                    if (currentIsVideo() && !zoomLocked) {
+                        val job = scope.launch {
+                            delay(450)
+                            speedBoost = true
+                            players[activeSlot].setPlaybackSpeed(2f)
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                        tryAwaitRelease()
+                        job.cancel()
+                        if (speedBoost) {
+                            speedBoost = false
+                            players[activeSlot].setPlaybackSpeed(speed)
+                        }
+                    }
+                },
+                onLongPress = { },
                 onTap = {
                     controlsVisible = !controlsVisible
                     touchStamp++
@@ -571,7 +774,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 onDoubleTap = { p ->
                     if (currentIsVideo()) {
                         val pl = players[activeSlot]
-                        val back = p.x < size.width / 2f
+                        val back = p.x < viewSize.width / 2f
                         val dur = pl.duration
                         var target = pl.currentPosition + if (back) -10_000L else 10_000L
                         if (target < 0L) target = 0L
@@ -580,40 +783,89 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         hint = if (back) "−10 s" else "+10 s"
                         hintStamp++
                     } else if (scale > 1.01f) {
-                        scale = 1f
-                        offset = Offset.Zero
+                        resetZoom()
                     } else {
-                        scale = 2.5f
-                        offset = Offset.Zero
+                        val target = 2.5f
+                        val c = Offset(viewSize.width / 2f, viewSize.height / 2f)
+                        val o = clampOffset((p - c) * (1f - target), target)
+                        zoomJob?.cancel()
+                        zoomJob = scope.launch { zoomAnim(target, o, tween(260, easing = FastOutSlowInEasing)) }
                     }
                 }
             )
         }
+        .pointerInput(verticalFeed) {
+            if (verticalFeed) {
+                var startPos = 0L
+                var dx = 0f
+                var target = 0L
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        if (currentIsVideo() && scale <= 1.01f) {
+                            scrubbing = true
+                            startPos = players[activeSlot].currentPosition
+                            dx = 0f
+                            target = startPos
+                        }
+                    },
+                    onDragEnd = {
+                        if (scrubbing) {
+                            players[activeSlot].seekTo(target)
+                            scrubbing = false
+                        }
+                    },
+                    onDragCancel = { scrubbing = false },
+                    onHorizontalDrag = { change, amount ->
+                        if (scrubbing) {
+                            change.consume()
+                            dx += amount
+                            val dur = players[activeSlot].duration.coerceAtLeast(1L)
+                            val span = minOf(dur, 120_000L)
+                            target = (startPos + (dx / viewSize.width.coerceAtLeast(1)) * span).toLong().coerceIn(0L, dur)
+                            scrubText = formatDuration(target) + " / " + formatDuration(dur)
+                        }
+                    }
+                )
+            }
+        }
         .pointerInput(Unit) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                zoomJob?.cancel()
                 var multi = false
+                var handled = false
+                val tracker = VelocityTracker()
                 do {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
-                    if (event.changes.count { it.pressed } >= 2) multi = true
-                    if (!currentIsVideo() && (multi || scale > 1.01f)) {
+                    val pressed = event.changes.count { it.pressed }
+                    if (pressed >= 2) multi = true
+                    if (multi || scale > 1.01f) {
+                        handled = true
                         val zoom = event.calculateZoom()
                         val pan = event.calculatePan()
-                        val newScale = (scale * zoom).coerceIn(1f, 6f)
-                        val maxX = size.width * (newScale - 1f) / 2f
-                        val maxY = size.height * (newScale - 1f) / 2f
-                        scale = newScale
-                        offset = if (newScale <= 1.01f) {
-                            Offset.Zero
-                        } else {
-                            Offset(
-                                (offset.x + pan.x).coerceIn(-maxX, maxX),
-                                (offset.y + pan.y).coerceIn(-maxY, maxY)
-                            )
+                        val centroid = event.calculateCentroid(useCurrent = true)
+                        val w = viewSize.width.toFloat()
+                        val h = viewSize.height.toFloat()
+                        val center = Offset(w / 2f, h / 2f)
+                        val old = scale
+                        val ns = (old * zoom).coerceIn(0.75f, 6f)
+                        // el punto bajo los dedos se mantiene bajo los dedos
+                        val contentPoint = (centroid - center - offset) / old
+                        val raw = centroid + pan - center - contentPoint * ns
+                        val bx = w * maxOf(ns - 1f, 0f) / 2f
+                        val by = h * maxOf(ns - 1f, 0f) / 2f
+                        scale = ns
+                        offset = if (ns <= 1f) Offset.Zero else Offset(soft(raw.x, -bx, bx), soft(raw.y, -by, by))
+                        if (pressed == 1) {
+                            tracker.addPosition(event.changes[0].uptimeMillis, event.changes[0].position)
                         }
                         event.changes.forEach { if (it.positionChanged()) it.consume() }
                     }
                 } while (event.changes.any { it.pressed })
+                if (handled) {
+                    val v = tracker.calculateVelocity()
+                    settleZoom(Offset(v.x, v.y))
+                }
             }
         }
 
@@ -623,7 +875,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        val scrollEnabled = scale <= 1.01f && !inPip
+        val scrollEnabled = !zoomLocked && !inPip
         if (verticalFeed) {
             VerticalPager(
                 state = pagerState,
@@ -644,16 +896,47 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
         val uiPage = pagerState.currentPage.coerceIn(0, order.size - 1)
         val item = itemAt(uiPage)
+        val isFavorite = item.uri in favorites
+        val canDelete = Uri.parse(item.uri).authority == MediaStore.AUTHORITY
 
-        if (hint.isNotEmpty()) {
+        if (hint.isNotEmpty() || scrubbing) {
             Text(
-                text = hint,
+                text = if (scrubbing) scrubText else hint,
                 color = Color.White,
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier
                     .align(Alignment.Center)
                     .background(Color(0x99000000), RoundedCornerShape(12.dp))
                     .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = speedBoost && !inPip,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)
+        ) {
+            Text(
+                text = "2×  ▶▶",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .background(Color(0x99000000), RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = zoomed && !inPip,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)
+        ) {
+            Text(
+                text = "Restablecer zoom",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .background(Color(0x99000000), RoundedCornerShape(50))
+                    .clickable { resetZoom() }
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
             )
         }
 
@@ -695,20 +978,63 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             tint = Color.White
                         )
                     }
-                    IconButton(onClick = { (context.findActivity() as? MainActivity)?.enterPip() }) {
-                        Icon(MixIcons.PictureInPictureAlt, contentDescription = "Imagen en imagen", tint = Color.White)
+                    IconButton(onClick = {
+                        toggleRotation()
+                        touchStamp++
+                    }) {
+                        Icon(MixIcons.ScreenRotation, contentDescription = "Girar pantalla", tint = Color.White)
                     }
-                }
-                IconButton(onClick = {
-                    shareUris(context, listOf(Uri.parse(item.uri)), allImages = !item.isVideo, allVideos = item.isVideo)
-                }) {
-                    Icon(MixIcons.Share, contentDescription = "Compartir", tint = Color.White)
                 }
                 IconButton(onClick = {
                     showOptions = true
                     touchStamp++
                 }) {
                     Icon(MixIcons.Tune, contentDescription = "Opciones", tint = Color.White)
+                }
+                Box {
+                    IconButton(onClick = {
+                        menuOpen = true
+                        touchStamp++
+                    }) {
+                        Icon(MixIcons.MoreVert, contentDescription = "Más opciones", tint = Color.White)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Compartir") },
+                            onClick = {
+                                menuOpen = false
+                                shareUris(
+                                    context,
+                                    listOf(Uri.parse(item.uri)),
+                                    allImages = !item.isVideo,
+                                    allVideos = item.isVideo
+                                )
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Agregar a lista") },
+                            onClick = {
+                                menuOpen = false
+                                showAddList = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Información") },
+                            onClick = {
+                                menuOpen = false
+                                showInfo = true
+                            }
+                        )
+                        if (item.isVideo) {
+                            DropdownMenuItem(
+                                text = { Text("Imagen en imagen") },
+                                onClick = {
+                                    menuOpen = false
+                                    (context.findActivity() as? MainActivity)?.enterPip(playing)
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -736,11 +1062,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         )
                         Text(formatDuration(videoDur), color = Color.White, style = MaterialTheme.typography.labelMedium)
                     }
-                } else {
+                } else if (!feedMode) {
                     LinearProgressIndicator(
                         progress = { imgProgress.value },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
                     )
+                } else {
+                    Spacer(Modifier.height(14.dp))
                 }
 
                 Row(
@@ -759,10 +1087,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         )
                     }
                     IconButton(onClick = {
-                        manual(-1)
+                        vm.toggleFavoriteKey(item.uri)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         touchStamp++
                     }) {
-                        Icon(MixIcons.SkipPrevious, contentDescription = "Anterior", tint = Color.White, modifier = Modifier.size(32.dp))
+                        Icon(
+                            imageVector = if (isFavorite) MixIcons.FavoriteFilled else MixIcons.Favorite,
+                            contentDescription = if (isFavorite) "Quitar de favoritos" else "Agregar a favoritos",
+                            tint = if (isFavorite) MixColors.Pink else Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
                     }
                     IconButton(onClick = {
                         togglePlay()
@@ -779,11 +1113,15 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             modifier = Modifier.size(44.dp)
                         )
                     }
-                    IconButton(onClick = {
-                        manual(1)
-                        touchStamp++
-                    }) {
-                        Icon(MixIcons.SkipNext, contentDescription = "Siguiente", tint = Color.White, modifier = Modifier.size(32.dp))
+                    if (canDelete) {
+                        IconButton(onClick = {
+                            confirmDelete = true
+                            touchStamp++
+                        }) {
+                            Icon(MixIcons.Delete, contentDescription = "Eliminar", tint = Color.White, modifier = Modifier.size(28.dp))
+                        }
+                    } else {
+                        Spacer(Modifier.size(48.dp))
                     }
                     IconButton(onClick = {
                         repeat = (repeat + 1) % 3
@@ -798,6 +1136,43 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     }
                 }
             }
+        }
+
+        if (confirmDelete) {
+            DeleteDialog(
+                count = 1,
+                name = item.name,
+                onTrash = {
+                    confirmDelete = false
+                    remover(listOf(Uri.parse(item.uri)), false)
+                },
+                onDelete = {
+                    confirmDelete = false
+                    remover(listOf(Uri.parse(item.uri)), true)
+                },
+                onDismiss = { confirmDelete = false }
+            )
+        }
+
+        if (showAddList) {
+            AddToPlaylistDialog(
+                playlists = playlists,
+                onPick = { p ->
+                    vm.addToPlaylist(p.playlist.id, listOf(item))
+                    showAddList = false
+                    Toast.makeText(context, "Agregado a \"${p.playlist.name}\"", Toast.LENGTH_SHORT).show()
+                },
+                onCreate = { name ->
+                    vm.createPlaylist(name, listOf(item))
+                    showAddList = false
+                    Toast.makeText(context, "Lista \"$name\" creada", Toast.LENGTH_SHORT).show()
+                },
+                onDismiss = { showAddList = false }
+            )
+        }
+
+        if (showInfo) {
+            InfoSheet(item = item, file = vm.mediaFor(item.uri), onDismiss = { showInfo = false })
         }
     }
 
@@ -819,6 +1194,24 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     onSelect = {
                         filterType = it
                         prefs.colorFilter = it.name
+                    }
+                )
+                OptionSwitch(
+                    title = "Modo feed",
+                    subtitle = "Sin avance automático: las imágenes se quedan hasta que deslizás y los videos se repiten en bucle.",
+                    checked = feedMode,
+                    onChange = {
+                        feedMode = it
+                        prefs.feedMode = it
+                    }
+                )
+                OptionSwitch(
+                    title = "Efecto Ken Burns",
+                    subtitle = "Movimiento lento en las imágenes de la presentación. Se pausa con el zoom.",
+                    checked = kenBurns,
+                    onChange = {
+                        kenBurns = it
+                        prefs.kenBurns = it
                     }
                 )
                 ChipRow(
@@ -858,26 +1251,18 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     label = { if (it == 0) "Apagado" else "$it min" },
                     onSelect = { sleepMinutes = it }
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Seguir reproduciendo en segundo plano", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Solo videos. Muestra una notificación mientras suena.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = bgPlayback,
-                        onCheckedChange = { value ->
-                            bgPlayback = value
-                            prefs.bgPlayback = value
-                            if (value && Build.VERSION.SDK_INT >= 33) {
-                                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
+                OptionSwitch(
+                    title = "Seguir reproduciendo en segundo plano",
+                    subtitle = "Solo videos. Muestra una notificación mientras suena.",
+                    checked = bgPlayback,
+                    onChange = { value ->
+                        bgPlayback = value
+                        prefs.bgPlayback = value
+                        if (value && Build.VERSION.SDK_INT >= 33) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
-                    )
-                }
+                    }
+                )
                 if (itemAt(settled()).isVideo) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {
@@ -896,6 +1281,61 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun OptionSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InfoSheet(item: QueueItem, file: MediaFile?, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(item.name, style = MaterialTheme.typography.titleMedium)
+            InfoRow("Tipo", if (item.isVideo) "Video" else "Imagen")
+            if (file != null) {
+                InfoRow("Carpeta", file.folder)
+                if (file.size > 0) InfoRow("Tamaño", Formatter.formatFileSize(context, file.size))
+                if (file.width > 0 && file.height > 0) InfoRow("Resolución", "${file.width} × ${file.height}")
+                if (file.dateTaken > 0) {
+                    val fmt = SimpleDateFormat("d 'de' MMMM 'de' yyyy, HH:mm", Locale.forLanguageTag("es-AR"))
+                    InfoRow(
+                        if (file.realDate) "Fecha de toma" else "Fecha de modificación",
+                        fmt.format(Date(file.dateTaken))
+                    )
+                }
+            }
+            val duration = if (file != null && file.durationMs > 0) file.durationMs else item.durationMs
+            if (item.isVideo && duration > 0) InfoRow("Duración", formatDuration(duration))
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyLarge)
     }
 }
 
