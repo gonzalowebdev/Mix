@@ -27,8 +27,10 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.splineBasedDecay
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -89,11 +91,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -106,6 +113,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -220,6 +228,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var speedBoost by remember { mutableStateOf(false) }
     var scrubbing by remember { mutableStateOf(false) }
     var scrubText by remember { mutableStateOf("") }
+    var mirror by remember { mutableIntStateOf(prefs.mirror) }
+    var tvMode by remember { mutableIntStateOf(prefs.tvMode) }
+    var tvStatic by remember { mutableStateOf(prefs.tvStatic) }
+    var ambient by remember { mutableStateOf(prefs.ambient) }
+    var tvTime by remember { mutableFloatStateOf(0f) }
+    var staticOn by remember { mutableStateOf(false) }
+    val crt = remember { if (Build.VERSION.SDK_INT >= 33) CrtShader.create() else null }
 
     // Zoom
     var scale by remember { mutableFloatStateOf(1f) }
@@ -408,6 +423,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
     fun settleZoom(velocity: Offset) {
         zoomJob?.cancel()
+        if (!scale.isFinite() || !offset.x.isFinite() || !offset.y.isFinite()) {
+            scale = 1f
+            offset = Offset.Zero
+        }
+        if (!velocity.x.isFinite() || !velocity.y.isFinite()) {
+            scale = scale.coerceAtLeast(1f)
+        }
         zoomJob = scope.launch {
             val s = scale
             if (s <= 1.02f) {
@@ -501,6 +523,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 scale = 1f
                 offset = Offset.Zero
                 finished = false
+                if (tvMode != 0 && tvStatic) {
+                    staticOn = true
+                    scope.launch {
+                        delay(260)
+                        staticOn = false
+                    }
+                }
                 activate(page, false, forward)
             }
         }
@@ -565,6 +594,12 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         if (hint.isNotEmpty()) {
             delay(700)
             hint = ""
+        }
+    }
+    LaunchedEffect(tvMode) {
+        while (tvMode != 0) {
+            tvTime = ((System.nanoTime() / 1_000_000L) % 1_000_000L) / 1000f
+            delay(66)
         }
     }
     LaunchedEffect(sleepMinutes) {
@@ -671,73 +706,100 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         val kbDy = if (variant == 0) -0.02f else 0f
         val layerMod = if (isSettled) {
             Modifier.graphicsLayer {
-                val p = if (kbActive && scale <= 1.01f) imgProgress.value else 0f
+                val sc = if (scale.isFinite() && scale > 0f) scale else 1f
+                val ox = if (offset.x.isFinite()) offset.x else 0f
+                val oy = if (offset.y.isFinite()) offset.y else 0f
+                val p = if (kbActive && sc <= 1.01f) imgProgress.value else 0f
                 val ks = 1f + 0.08f * p
-                scaleX = scale * ks
-                scaleY = scale * ks
-                translationX = offset.x + kbDx * p * size.width
-                translationY = offset.y + kbDy * p * size.height
+                scaleX = sc * ks
+                scaleY = sc * ks
+                translationX = ox + kbDx * p * size.width
+                translationY = oy + kbDy * p * size.height
             }
         } else {
             Modifier
         }
         Box(Modifier.fillMaxSize().background(Color.Black).clipToBounds()) {
+            if (ambient) {
+                val backdrop = remember(pageItem.uri) {
+                    ImageRequest.Builder(context)
+                        .data(Uri.parse(pageItem.uri))
+                        .size(160)
+                        .apply { if (pageItem.isVideo) videoFramePercent(0.1) }
+                        .build()
+                }
+                AsyncImage(
+                    model = backdrop,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = composeFilter,
+                    modifier = Modifier.fillMaxSize().blur(36.dp)
+                )
+                Box(Modifier.fillMaxSize().background(Color(0x66000000)))
+            }
             Box(Modifier.fillMaxSize().then(layerMod)) {
-                if (!pageItem.isVideo) {
-                    val request = remember(pageItem.uri) {
-                        ImageRequest.Builder(context)
-                            .data(Uri.parse(pageItem.uri))
-                            .size(2048)
-                            .build()
+                Box(
+                    Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = if ((mirror and 1) != 0) -1f else 1f
+                        scaleY = if ((mirror and 2) != 0) -1f else 1f
                     }
-                    AsyncImage(
-                        model = request,
-                        contentDescription = pageItem.name,
-                        contentScale = ContentScale.Fit,
-                        colorFilter = composeFilter,
-                        onSuccess = { if (isSettled) errors = 0 },
-                        onError = { if (isSettled) onMediaError() },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    val thumb = remember(pageItem.uri) {
-                        ImageRequest.Builder(context)
-                            .data(Uri.parse(pageItem.uri))
-                            .size(1080)
-                            .videoFramePercent(0.1)
-                            .build()
-                    }
-                    AsyncImage(
-                        model = thumb,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        colorFilter = composeFilter,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    val s = slotUri.indexOf(pageItem.uri)
-                    if (s >= 0) {
-                        key(s) {
-                            AndroidView(
-                                factory = { c ->
-                                    val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
-                                    pv.player = players[s]
-                                    pv
-                                },
-                                update = { pv ->
-                                    val tv = pv.videoSurfaceView as? TextureView
-                                    val values = filterType.values
-                                    if (tv != null) {
-                                        if (values != null) {
-                                            val paint = Paint()
-                                            paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
-                                            tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-                                        } else {
-                                            tv.setLayerType(View.LAYER_TYPE_NONE, null)
+                ) {
+                    if (!pageItem.isVideo) {
+                        val request = remember(pageItem.uri) {
+                            ImageRequest.Builder(context)
+                                .data(Uri.parse(pageItem.uri))
+                                .size(2048)
+                                .build()
+                        }
+                        AsyncImage(
+                            model = request,
+                            contentDescription = pageItem.name,
+                            contentScale = ContentScale.Fit,
+                            colorFilter = composeFilter,
+                            onSuccess = { if (isSettled) errors = 0 },
+                            onError = { if (isSettled) onMediaError() },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        val thumb = remember(pageItem.uri) {
+                            ImageRequest.Builder(context)
+                                .data(Uri.parse(pageItem.uri))
+                                .size(1080)
+                                .videoFramePercent(0.1)
+                                .build()
+                        }
+                        AsyncImage(
+                            model = thumb,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            colorFilter = composeFilter,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        val s = slotUri.indexOf(pageItem.uri)
+                        if (s >= 0) {
+                            key(s) {
+                                AndroidView(
+                                    factory = { c ->
+                                        val pv = LayoutInflater.from(c).inflate(R.layout.player_view, null) as PlayerView
+                                        pv.player = players[s]
+                                        pv
+                                    },
+                                    update = { pv ->
+                                        val tv = pv.videoSurfaceView as? TextureView
+                                        val values = filterType.values
+                                        if (tv != null) {
+                                            if (values != null) {
+                                                val paint = Paint()
+                                                paint.colorFilter = ColorMatrixColorFilter(AndroidColorMatrix(values))
+                                                tv.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
+                                            } else {
+                                                tv.setLayerType(View.LAYER_TYPE_NONE, null)
+                                            }
                                         }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -839,11 +901,11 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val pressed = event.changes.count { it.pressed }
                     if (pressed >= 2) multi = true
-                    if (multi || scale > 1.01f) {
+                    val centroid = event.calculateCentroid(useCurrent = true)
+                    if ((multi || scale > 1.01f) && pressed >= 1 && centroid.isSpecified) {
                         handled = true
                         val zoom = event.calculateZoom()
                         val pan = event.calculatePan()
-                        val centroid = event.calculateCentroid(useCurrent = true)
                         val w = viewSize.width.toFloat()
                         val h = viewSize.height.toFloat()
                         val center = Offset(w / 2f, h / 2f)
@@ -869,6 +931,17 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             }
         }
 
+    // Pantalla retro: el efecto se aplica a todo el feed (curvatura real en Android 13+)
+    val crtMod = if (tvMode != 0 && crt != null) {
+        Modifier.graphicsLayer {
+            if (Build.VERSION.SDK_INT >= 33) {
+                renderEffect = crt.effect(size.width, size.height, tvTime, tvMode == 2)
+            }
+        }
+    } else {
+        Modifier
+    }
+
     // ---- UI ----
     Box(
         Modifier
@@ -879,7 +952,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         if (verticalFeed) {
             VerticalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize().then(gestureModifier),
+                modifier = Modifier.fillMaxSize().then(crtMod).then(gestureModifier),
                 beyondViewportPageCount = 1,
                 userScrollEnabled = scrollEnabled,
                 key = { order[it] }
@@ -887,7 +960,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         } else {
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize().then(gestureModifier),
+                modifier = Modifier.fillMaxSize().then(crtMod).then(gestureModifier),
                 beyondViewportPageCount = 1,
                 userScrollEnabled = scrollEnabled,
                 key = { order[it] }
@@ -898,6 +971,21 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         val item = itemAt(uiPage)
         val isFavorite = item.uri in favorites
         val canDelete = Uri.parse(item.uri).authority == MediaStore.AUTHORITY
+
+        if (tvMode != 0 && crt == null && !inPip) CrtOverlay()
+        if (tvMode == 2 && !inPip) {
+            Text(
+                text = "▶ PLAY",
+                color = Color(0xFFE6FFE6),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 28.dp, top = 28.dp)
+            )
+        }
+        if (staticOn && !inPip) StaticNoise()
 
         if (hint.isNotEmpty() || scrubbing) {
             Text(
@@ -1191,9 +1279,63 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     selected = filterType,
                     label = { it.label },
                     wrap = true,
+                    leading = { opt -> SwatchDot(opt) },
                     onSelect = {
                         filterType = it
                         prefs.colorFilter = it.name
+                    }
+                )
+                ChipRow(
+                    title = "Espejo",
+                    options = listOf(0, 1, 2, 3),
+                    selected = mirror,
+                    label = {
+                        when (it) {
+                            1 -> "Horizontal"
+                            2 -> "Vertical"
+                            3 -> "Ambos"
+                            else -> "Apagado"
+                        }
+                    },
+                    onSelect = {
+                        mirror = it
+                        prefs.mirror = it
+                    }
+                )
+                ChipRow(
+                    title = "Pantalla retro",
+                    options = listOf(0, 1, 2),
+                    selected = tvMode,
+                    label = {
+                        when (it) {
+                            1 -> "TV de tubo"
+                            2 -> "VHS"
+                            else -> "Apagado"
+                        }
+                    },
+                    onSelect = {
+                        tvMode = it
+                        prefs.tvMode = it
+                    }
+                )
+                if (tvMode != 0) {
+                    OptionSwitch(
+                        title = "Estática al cambiar de archivo",
+                        subtitle = "Efecto de cambio de canal entre un archivo y otro.",
+                        checked = tvStatic,
+                        onChange = {
+                            tvStatic = it
+                            prefs.tvStatic = it
+                        }
+                    )
+                }
+                OptionSwitch(
+                    title = "Ambiente",
+                    subtitle = "Fondo difuminado con los colores del contenido alrededor de la imagen.",
+                    checked = ambient,
+                    onChange = {
+                        ambient = it
+                        prefs.ambient = it
                     }
                 )
                 OptionSwitch(
@@ -1347,14 +1489,20 @@ private fun <T> ChipRow(
     selected: T,
     label: (T) -> String,
     onSelect: (T) -> Unit,
-    wrap: Boolean = false
+    wrap: Boolean = false,
+    leading: (@Composable (T) -> Unit)? = null
 ) {
     val chips: @Composable () -> Unit = {
         options.forEach { option ->
             FilterChip(
                 selected = option == selected,
                 onClick = { onSelect(option) },
-                label = { Text(label(option)) }
+                label = { Text(label(option)) },
+                leadingIcon = if (leading != null) {
+                    { leading(option) }
+                } else {
+                    null
+                }
             )
         }
     }
@@ -1370,6 +1518,101 @@ private fun <T> ChipRow(
                 Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) { chips() }
+        }
+    }
+}
+
+/** Color representativo de cada filtro, para el círculo junto al nombre. */
+private fun swatchOf(t: ColorFilterType): Long = when (t) {
+    ColorFilterType.NONE -> 0xFF9A959C
+    ColorFilterType.SEPIA -> 0xFFB5835A
+    ColorFilterType.BW -> 0xFFB0B0B0
+    ColorFilterType.KODAK -> 0xFFE8A93A
+    ColorFilterType.POLAROID -> 0xFFD9C7B0
+    ColorFilterType.EIGHTIES -> 0xFFD94FB0
+    ColorFilterType.VINTAGE -> 0xFFC9A66B
+    ColorFilterType.GOLDEN -> 0xFFFFA630
+    ColorFilterType.CINEMA -> 0xFF3E8E9C
+    ColorFilterType.NEON -> 0xFF8A4DFF
+    ColorFilterType.LOMO -> 0xFF8FB339
+    ColorFilterType.FADED -> 0xFFB59CA6
+    ColorFilterType.NOIR -> 0xFF3A3A3F
+    ColorFilterType.ROSE -> 0xFFFF7FAF
+    ColorFilterType.WARM -> 0xFFF0A05A
+    ColorFilterType.COOL -> 0xFF6EC1E4
+    ColorFilterType.BLUE -> 0xFF3D6BFF
+    ColorFilterType.VIVID -> 0xFFFF3D6E
+    ColorFilterType.NIGHT -> 0xFF8B1E2B
+}
+
+@Composable
+private fun SwatchDot(type: ColorFilterType) {
+    val base = Color(swatchOf(type))
+    val shape = androidx.compose.foundation.shape.CircleShape
+    if (type == ColorFilterType.NONE) {
+        Box(
+            Modifier
+                .size(16.dp)
+                .border(1.5.dp, base, shape)
+        )
+    } else {
+        Box(
+            Modifier
+                .size(16.dp)
+                .clip(shape)
+                .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.55f).compositeOver(base), base)))
+                .border(0.5.dp, Color.White.copy(alpha = 0.25f), shape)
+        )
+    }
+}
+
+/** Alternativa para Android anteriores al 13: líneas de barrido y viñeta. */
+@Composable
+private fun CrtOverlay() {
+    Canvas(Modifier.fillMaxSize()) {
+        val step = 4.dp.toPx()
+        var y = 0f
+        while (y < size.height) {
+            drawLine(
+                color = Color.Black.copy(alpha = 0.22f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = step / 2f
+            )
+            y += step
+        }
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(Color.Transparent, Color(0xAA000000)),
+                center = center,
+                radius = size.maxDimension * 0.75f
+            )
+        )
+    }
+}
+
+/** Estática breve de "cambio de canal". */
+@Composable
+private fun StaticNoise() {
+    var seed by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            seed++
+            delay(45)
+        }
+    }
+    Canvas(Modifier.fillMaxSize()) {
+        val rnd = kotlin.random.Random(seed)
+        drawRect(Color(0xFF101010))
+        repeat(900) {
+            val x = rnd.nextFloat() * size.width
+            val y = rnd.nextFloat() * size.height
+            val g = rnd.nextFloat()
+            drawRect(
+                color = Color(g, g, g, 1f),
+                topLeft = Offset(x, y),
+                size = Size(rnd.nextFloat() * 40f + 4f, 3f)
+            )
         }
     }
 }

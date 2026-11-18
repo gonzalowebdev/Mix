@@ -52,6 +52,24 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("kenBurns", false)
         set(v) = sp.edit().putBoolean("kenBurns", v).apply()
 
+    /** 0 = apagado, 1 = horizontal, 2 = vertical, 3 = ambos */
+    var mirror: Int
+        get() = sp.getInt("mirror", 0)
+        set(v) = sp.edit().putInt("mirror", v).apply()
+
+    /** 0 = apagado, 1 = TV de tubo, 2 = VHS */
+    var tvMode: Int
+        get() = sp.getInt("tvMode", 0)
+        set(v) = sp.edit().putInt("tvMode", v).apply()
+
+    var tvStatic: Boolean
+        get() = sp.getBoolean("tvStatic", false)
+        set(v) = sp.edit().putBoolean("tvStatic", v).apply()
+
+    var ambient: Boolean
+        get() = sp.getBoolean("ambient", false)
+        set(v) = sp.edit().putBoolean("ambient", v).apply()
+
     var muted: Boolean
         get() = sp.getBoolean("muted", true)
         set(v) = sp.edit().putBoolean("muted", v).apply()

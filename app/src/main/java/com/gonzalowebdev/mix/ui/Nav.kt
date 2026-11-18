@@ -129,7 +129,10 @@ fun MixRoot(
             enter = slideInVertically(tween(220)) { it } + fadeIn(tween(220)),
             exit = slideOutVertically(tween(160)) { it } + fadeOut(tween(160))
         ) {
-            FloatingNav(tabs = tabs, current = route) { tab -> goTab(nav, tab.route) }
+            FloatingNav(tabs = tabs, current = route) { tab ->
+                if (tab.route == "library") vm.closeSearch()
+                goTab(nav, tab.route)
+            }
         }
     }
 }

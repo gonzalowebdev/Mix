@@ -51,6 +51,14 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     var query by mutableStateOf("")
+
+    /** La barra de búsqueda abierta y el texto viven juntos: cerrar una limpia la otra. */
+    var searchOpen by mutableStateOf(false)
+
+    fun closeSearch() {
+        searchOpen = false
+        query = ""
+    }
     var typeFilter by mutableStateOf(
         try { TypeFilter.valueOf(prefs.typeFilter) } catch (e: Exception) { TypeFilter.ALL }
     )

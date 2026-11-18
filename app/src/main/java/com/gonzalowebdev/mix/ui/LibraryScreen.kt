@@ -127,7 +127,7 @@ fun LibraryScreen(
     val playlists by vm.playlists.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var searching by remember { mutableStateOf(false) }
+    val searching = vm.searchOpen
     var showAdd by remember { mutableStateOf(false) }
     var topMenu by remember { mutableStateOf(false) }
     var selMenu by remember { mutableStateOf(false) }
@@ -135,14 +135,13 @@ fun LibraryScreen(
     val focus = remember { FocusRequester() }
     val selecting = vm.selected.isNotEmpty()
 
-    LaunchedEffect(searching) { if (searching) focus.requestFocus() }
+    LaunchedEffect(searching) { if (searching && vm.query.isEmpty()) focus.requestFocus() }
 
     BackHandler(enabled = selecting || searching) {
         if (selecting) {
             vm.clearSelection()
         } else {
-            searching = false
-            vm.query = ""
+            vm.closeSearch()
         }
     }
 
@@ -279,10 +278,7 @@ fun LibraryScreen(
                     },
                     navigationIcon = {
                         if (searching) {
-                            IconButton(onClick = {
-                                searching = false
-                                vm.query = ""
-                            }) {
+                            IconButton(onClick = { vm.closeSearch() }) {
                                 Icon(MixIcons.ArrowBack, contentDescription = "Cerrar búsqueda")
                             }
                         }
@@ -298,7 +294,7 @@ fun LibraryScreen(
                             IconButton(onClick = { vm.reshuffle() }) {
                                 Icon(MixIcons.Shuffle, contentDescription = "Mezclar")
                             }
-                            IconButton(onClick = { searching = true }) {
+                            IconButton(onClick = { vm.searchOpen = true }) {
                                 Icon(MixIcons.Search, contentDescription = "Buscar")
                             }
                             Box {
