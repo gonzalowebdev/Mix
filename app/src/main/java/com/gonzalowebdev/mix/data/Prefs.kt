@@ -70,6 +70,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("ambient", false)
         set(v) = sp.edit().putBoolean("ambient", v).apply()
 
+    var tipsSeen: Boolean
+        get() = sp.getBoolean("tipsSeen", false)
+        set(v) = sp.edit().putBoolean("tipsSeen", v).apply()
+
     var muted: Boolean
         get() = sp.getBoolean("muted", true)
         set(v) = sp.edit().putBoolean("muted", v).apply()

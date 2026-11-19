@@ -18,6 +18,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -46,6 +50,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -61,6 +78,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -93,11 +111,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.compositeOver
@@ -109,12 +131,14 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -166,7 +190,7 @@ private fun soft(v: Float, lo: Float, hi: Float): Float = when {
     else -> v
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var queue by remember { mutableStateOf(vm.queue) }
@@ -233,6 +257,9 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var tvStatic by remember { mutableStateOf(prefs.tvStatic) }
     var ambient by remember { mutableStateOf(prefs.ambient) }
     var tvTime by remember { mutableFloatStateOf(0f) }
+    val tvPower = remember { Animatable(1f) }
+    var showTips by remember { mutableStateOf(!prefs.tipsSeen) }
+    var optionsTab by remember { mutableIntStateOf(0) }
     var staticOn by remember { mutableStateOf(false) }
     val crt = remember { if (Build.VERSION.SDK_INT >= 33) CrtShader.create() else null }
 
@@ -246,6 +273,11 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
     val imgProgress = remember { Animatable(0f) }
     var progressKey by remember { mutableLongStateOf(-1L) }
+    val osdSeconds by remember {
+        derivedStateOf {
+            if (itemAt0(queue, order, pagerState.settledPage).isVideo) videoPos / 1000 else (imgProgress.value * seconds).toLong()
+        }
+    }
     val composeFilter = remember(filterType) {
         filterType.values?.let { ColorFilter.colorMatrix(ComposeColorMatrix(it)) }
     }
@@ -720,7 +752,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             Modifier
         }
         Box(Modifier.fillMaxSize().background(Color.Black).clipToBounds()) {
-            if (ambient) {
+            if (ambient && tvMode == 0) {
                 val backdrop = remember(pageItem.uri) {
                     ImageRequest.Builder(context)
                         .data(Uri.parse(pageItem.uri))
@@ -751,14 +783,20 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                                 .size(2048)
                                 .build()
                         }
+                        var intrinsic by remember(pageItem.uri) { mutableStateOf(Size.Zero) }
                         AsyncImage(
                             model = request,
                             contentDescription = pageItem.name,
                             contentScale = ContentScale.Fit,
                             colorFilter = composeFilter,
-                            onSuccess = { if (isSettled) errors = 0 },
+                            onSuccess = { st ->
+                                intrinsic = st.painter.intrinsicSize
+                                if (isSettled) errors = 0
+                            },
                             onError = { if (isSettled) onMediaError() },
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(if (ambient && tvMode == 0) featherModifier(intrinsic) else Modifier)
                         )
                     } else {
                         val thumb = remember(pageItem.uri) {
@@ -830,8 +868,12 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 },
                 onLongPress = { },
                 onTap = {
-                    controlsVisible = !controlsVisible
-                    touchStamp++
+                    if (showOptions) {
+                        showOptions = false
+                    } else {
+                        controlsVisible = !controlsVisible
+                        touchStamp++
+                    }
                 },
                 onDoubleTap = { p ->
                     if (currentIsVideo()) {
@@ -935,7 +977,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val crtMod = if (tvMode != 0 && crt != null) {
         Modifier.graphicsLayer {
             if (Build.VERSION.SDK_INT >= 33) {
-                renderEffect = crt.effect(size.width, size.height, tvTime, tvMode == 2)
+                renderEffect = crt.effect(size.width, size.height, tvTime, tvMode == 2, tvPower.value, !playing)
             }
         }
     } else {
@@ -971,19 +1013,37 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         val item = itemAt(uiPage)
         val isFavorite = item.uri in favorites
         val canDelete = Uri.parse(item.uri).authority == MediaStore.AUTHORITY
+        // Zonas seguras: respeta la cámara frontal y los bordes aunque las barras del sistema estén ocultas
+        val topInsets = WindowInsets.statusBarsIgnoringVisibility
+            .union(WindowInsets.displayCutout)
+            .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+        val bottomInsets = WindowInsets.navigationBarsIgnoringVisibility
+            .union(WindowInsets.displayCutout)
+            .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
 
         if (tvMode != 0 && crt == null && !inPip) CrtOverlay()
         if (tvMode == 2 && !inPip) {
-            Text(
-                text = "▶ PLAY",
-                color = Color(0xFFE6FFE6),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .statusBarsPadding()
-                    .padding(start = 28.dp, top = 28.dp)
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(topInsets)
+                    .padding(horizontal = 28.dp, vertical = 52.dp)
+                    .align(Alignment.TopCenter),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (playing) "▶ PLAY" else "❚❚ PAUSE",
+                    color = Color(0xFFE6FFE6),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "SP  " + formatDuration(osdSeconds * 1000),
+                    color = Color(0xFFE6FFE6),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
         }
         if (staticOn && !inPip) StaticNoise()
 
@@ -1001,7 +1061,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
         AnimatedVisibility(
             visible = speedBoost && !inPip,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)
+            modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(topInsets).padding(top = 72.dp)
         ) {
             Text(
                 text = "2×  ▶▶",
@@ -1015,7 +1075,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
 
         AnimatedVisibility(
             visible = zoomed && !inPip,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)
+            modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(topInsets).padding(top = 72.dp)
         ) {
             Text(
                 text = "Restablecer zoom",
@@ -1028,18 +1088,23 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             )
         }
 
-        AnimatedVisibility(visible = controlsVisible && !inPip, modifier = Modifier.align(Alignment.TopCenter)) {
+        // ---- Barra superior ----
+        AnimatedVisibility(
+            visible = controlsVisible && !inPip,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { -it / 3 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { -it / 3 }
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
-                    .statusBarsPadding()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent)))
+                    .windowInsetsPadding(topInsets)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = onClose) {
-                    Icon(MixIcons.ArrowBack, contentDescription = "Cerrar", tint = Color.White)
-                }
+                GlassIconButton(MixIcons.ArrowBack, "Cerrar", onClick = onClose)
                 Column(Modifier.weight(1f)) {
                     Text(
                         text = item.name,
@@ -1049,46 +1114,40 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        text = "${uiPage + 1}/${order.size}",
-                        color = Color.White.copy(alpha = 0.8f),
+                        text = "${uiPage + 1} de ${order.size}",
+                        color = Color.White.copy(alpha = 0.75f),
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
                 if (item.isVideo) {
-                    IconButton(onClick = {
-                        muted = !muted
-                        prefs.muted = muted
-                        touchStamp++
-                    }) {
-                        Icon(
-                            imageVector = if (muted) MixIcons.VolumeOff else MixIcons.VolumeUp,
-                            contentDescription = if (muted) "Activar sonido" else "Silenciar",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = {
-                        toggleRotation()
-                        touchStamp++
-                    }) {
-                        Icon(MixIcons.ScreenRotation, contentDescription = "Girar pantalla", tint = Color.White)
-                    }
+                    GlassIconButton(
+                        icon = if (muted) MixIcons.VolumeOff else MixIcons.VolumeUp,
+                        description = if (muted) "Activar sonido" else "Silenciar",
+                        onClick = {
+                            muted = !muted
+                            prefs.muted = muted
+                            touchStamp++
+                        }
+                    )
                 }
-                IconButton(onClick = {
-                    showOptions = true
+                GlassIconButton(MixIcons.Tune, "Ajustes") {
+                    showOptions = !showOptions
                     touchStamp++
-                }) {
-                    Icon(MixIcons.Tune, contentDescription = "Opciones", tint = Color.White)
                 }
                 Box {
-                    IconButton(onClick = {
+                    GlassIconButton(MixIcons.MoreVert, "Más opciones") {
                         menuOpen = true
                         touchStamp++
-                    }) {
-                        Icon(MixIcons.MoreVert, contentDescription = "Más opciones", tint = Color.White)
                     }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ) {
                         DropdownMenuItem(
                             text = { Text("Compartir") },
+                            leadingIcon = { Icon(MixIcons.Share, contentDescription = null, modifier = Modifier.size(20.dp)) },
                             onClick = {
                                 menuOpen = false
                                 shareUris(
@@ -1101,6 +1160,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         )
                         DropdownMenuItem(
                             text = { Text("Agregar a lista") },
+                            leadingIcon = { Icon(MixIcons.PlaylistAdd, contentDescription = null, modifier = Modifier.size(20.dp)) },
                             onClick = {
                                 menuOpen = false
                                 showAddList = true
@@ -1108,14 +1168,25 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         )
                         DropdownMenuItem(
                             text = { Text("Información") },
+                            leadingIcon = { Icon(MixIcons.Info, contentDescription = null, modifier = Modifier.size(20.dp)) },
                             onClick = {
                                 menuOpen = false
                                 showInfo = true
                             }
                         )
                         if (item.isVideo) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            DropdownMenuItem(
+                                text = { Text(if (forcedLandscape) "Pantalla vertical" else "Pantalla horizontal") },
+                                leadingIcon = { Icon(MixIcons.ScreenRotation, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                onClick = {
+                                    menuOpen = false
+                                    toggleRotation()
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Imagen en imagen") },
+                                leadingIcon = { Icon(MixIcons.PictureInPictureAlt, contentDescription = null, modifier = Modifier.size(20.dp)) },
                                 onClick = {
                                     menuOpen = false
                                     (context.findActivity() as? MainActivity)?.enterPip(playing)
@@ -1127,12 +1198,22 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             }
         }
 
-        AnimatedVisibility(visible = controlsVisible && !inPip, modifier = Modifier.align(Alignment.BottomCenter)) {
+        // ---- Barra inferior: una sola pieza translúcida ----
+        AnimatedVisibility(
+            visible = controlsVisible && !inPip && !showOptions,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 3 },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 3 }
+        ) {
+            val glass = RoundedCornerShape(30.dp)
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
-                    .navigationBarsPadding()
+                    .windowInsetsPadding(bottomInsets)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .clip(glass)
+                    .background(Color(0xB30B0B0D))
+                    .border(0.5.dp, Color(0x22FFFFFF), glass)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 if (item.isVideo) {
@@ -1153,10 +1234,10 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                 } else if (!feedMode) {
                     LinearProgressIndicator(
                         progress = { imgProgress.value },
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp, horizontal = 4.dp)
                     )
                 } else {
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(6.dp))
                 }
 
                 Row(
@@ -1183,13 +1264,16 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             imageVector = if (isFavorite) MixIcons.FavoriteFilled else MixIcons.Favorite,
                             contentDescription = if (isFavorite) "Quitar de favoritos" else "Agregar a favoritos",
                             tint = if (isFavorite) MixColors.Pink else Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                     }
-                    IconButton(onClick = {
-                        togglePlay()
-                        touchStamp++
-                    }, modifier = Modifier.size(64.dp)) {
+                    IconButton(
+                        onClick = {
+                            togglePlay()
+                            touchStamp++
+                        },
+                        modifier = Modifier.size(60.dp).background(MixColors.Pink, CircleShape)
+                    ) {
                         Icon(
                             imageVector = when {
                                 finished -> MixIcons.Replay
@@ -1197,8 +1281,8 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                                 else -> MixIcons.PlayArrow
                             },
                             contentDescription = "Reproducir / pausar",
-                            tint = Color.White,
-                            modifier = Modifier.size(44.dp)
+                            tint = MixColors.Black,
+                            modifier = Modifier.size(30.dp)
                         )
                     }
                     if (canDelete) {
@@ -1206,7 +1290,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             confirmDelete = true
                             touchStamp++
                         }) {
-                            Icon(MixIcons.Delete, contentDescription = "Eliminar", tint = Color.White, modifier = Modifier.size(28.dp))
+                            Icon(MixIcons.Delete, contentDescription = "Eliminar", tint = Color.White, modifier = Modifier.size(26.dp))
                         }
                     } else {
                         Spacer(Modifier.size(48.dp))
@@ -1262,169 +1346,369 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         if (showInfo) {
             InfoSheet(item = item, file = vm.mediaFor(item.uri), onDismiss = { showInfo = false })
         }
-    }
 
-    if (showOptions) {
-        ModalBottomSheet(onDismissRequest = { showOptions = false }) {
+        // ---- Panel de ajustes con vista previa en vivo (el contenido queda visible arriba) ----
+        BackHandler(enabled = showOptions) { showOptions = false }
+        val panelMax = (LocalConfiguration.current.screenHeightDp * 0.46f).dp
+        AnimatedVisibility(
+            visible = showOptions && !inPip,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(tween(240)) { it } + fadeIn(tween(200)),
+            exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(160))
+        ) {
+            val panelShape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
             Column(
                 Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp)
-                    .navigationBarsPadding(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = panelMax)
+                    .clip(panelShape)
+                    .background(Color(0xF2141417))
+                    .border(0.5.dp, Color(0x22FFFFFF), panelShape)
+                    .windowInsetsPadding(bottomInsets)
             ) {
-                ChipRow(
-                    title = "Filtro de color",
-                    options = ColorFilterType.entries.toList(),
-                    selected = filterType,
-                    label = { it.label },
-                    wrap = true,
-                    leading = { opt -> SwatchDot(opt) },
-                    onSelect = {
-                        filterType = it
-                        prefs.colorFilter = it.name
-                    }
+                Box(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(top = 8.dp)
+                        .size(width = 36.dp, height = 4.dp)
+                        .background(Color(0x44FFFFFF), RoundedCornerShape(2.dp))
                 )
-                ChipRow(
-                    title = "Espejo",
-                    options = listOf(0, 1, 2, 3),
-                    selected = mirror,
-                    label = {
-                        when (it) {
-                            1 -> "Horizontal"
-                            2 -> "Vertical"
-                            3 -> "Ambos"
-                            else -> "Apagado"
-                        }
-                    },
-                    onSelect = {
-                        mirror = it
-                        prefs.mirror = it
-                    }
-                )
-                ChipRow(
-                    title = "Pantalla retro",
-                    options = listOf(0, 1, 2),
-                    selected = tvMode,
-                    label = {
-                        when (it) {
-                            1 -> "TV de tubo"
-                            2 -> "VHS"
-                            else -> "Apagado"
-                        }
-                    },
-                    onSelect = {
-                        tvMode = it
-                        prefs.tvMode = it
-                    }
-                )
-                if (tvMode != 0) {
-                    OptionSwitch(
-                        title = "Estática al cambiar de archivo",
-                        subtitle = "Efecto de cambio de canal entre un archivo y otro.",
-                        checked = tvStatic,
-                        onChange = {
-                            tvStatic = it
-                            prefs.tvStatic = it
-                        }
-                    )
-                }
-                OptionSwitch(
-                    title = "Ambiente",
-                    subtitle = "Fondo difuminado con los colores del contenido alrededor de la imagen.",
-                    checked = ambient,
-                    onChange = {
-                        ambient = it
-                        prefs.ambient = it
-                    }
-                )
-                OptionSwitch(
-                    title = "Modo feed",
-                    subtitle = "Sin avance automático: las imágenes se quedan hasta que deslizás y los videos se repiten en bucle.",
-                    checked = feedMode,
-                    onChange = {
-                        feedMode = it
-                        prefs.feedMode = it
-                    }
-                )
-                OptionSwitch(
-                    title = "Efecto Ken Burns",
-                    subtitle = "Movimiento lento en las imágenes de la presentación. Se pausa con el zoom.",
-                    checked = kenBurns,
-                    onChange = {
-                        kenBurns = it
-                        prefs.kenBurns = it
-                    }
-                )
-                ChipRow(
-                    title = "Deslizar para cambiar",
-                    options = listOf(true, false),
-                    selected = verticalFeed,
-                    label = { if (it) "Vertical" else "Horizontal" },
-                    onSelect = {
-                        verticalFeed = it
-                        prefs.feedVertical = it
-                    }
-                )
-                ChipRow(
-                    title = "Duración de cada imagen",
-                    options = listOf(2, 3, 5, 8, 10, 15, 30, 60),
-                    selected = seconds,
-                    label = { "$it s" },
-                    onSelect = {
-                        seconds = it
-                        prefs.imageSeconds = it
-                    }
-                )
-                ChipRow(
-                    title = "Velocidad de video",
-                    options = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f),
-                    selected = speed,
-                    label = { "${it}x" },
-                    onSelect = {
-                        speed = it
-                        prefs.speed = it
-                    }
-                )
-                ChipRow(
-                    title = "Temporizador de apagado",
-                    options = listOf(0, 15, 30, 45, 60, 90),
-                    selected = sleepMinutes,
-                    label = { if (it == 0) "Apagado" else "$it min" },
-                    onSelect = { sleepMinutes = it }
-                )
-                OptionSwitch(
-                    title = "Seguir reproduciendo en segundo plano",
-                    subtitle = "Solo videos. Muestra una notificación mientras suena.",
-                    checked = bgPlayback,
-                    onChange = { value ->
-                        bgPlayback = value
-                        prefs.bgPlayback = value
-                        if (value && Build.VERSION.SDK_INT >= 33) {
-                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    }
-                )
-                if (itemAt(settled()).isVideo) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            showOptions = false
-                            subtitleLauncher.launch(arrayOf("*/*"))
-                        }) { Text("Cargar subtítulos") }
-                        if (prefs.getSubtitle(itemAt(settled()).uri) != null) {
-                            OutlinedButton(onClick = {
-                                prefs.setSubtitle(itemAt(settled()).uri, null)
-                                showOptions = false
-                                tick++
-                            }) { Text("Quitar subtítulos") }
-                        }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Filtros", "Vista", "Reproducción").forEachIndexed { i, label ->
+                        val sel = optionsTab == i
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (sel) MixColors.Pink else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (sel) MixColors.Pink.copy(alpha = 0.16f) else Color.Transparent)
+                                .clickable { optionsTab = i }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Column(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    when (optionsTab) {
+                        0 -> {
+                            val previewRequest = remember(item.uri) {
+                                ImageRequest.Builder(context)
+                                    .data(Uri.parse(item.uri))
+                                    .size(200)
+                                    .apply { if (item.isVideo) videoFramePercent(0.1) }
+                                    .build()
+                            }
+                            Text("Tocá un filtro: se aplica en vivo", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                items(ColorFilterType.entries.toList()) { type ->
+                                    FilterCard(
+                                        type = type,
+                                        selected = type == filterType,
+                                        request = previewRequest,
+                                        onClick = {
+                                            filterType = type
+                                            prefs.colorFilter = type.name
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        1 -> {
+                            ChipRow(
+                                title = "Espejo",
+                                options = listOf(0, 1, 2, 3),
+                                selected = mirror,
+                                label = {
+                                    when (it) {
+                                        1 -> "Horizontal"
+                                        2 -> "Vertical"
+                                        3 -> "Ambos"
+                                        else -> "Apagado"
+                                    }
+                                },
+                                onSelect = {
+                                    mirror = it
+                                    prefs.mirror = it
+                                }
+                            )
+                            ChipRow(
+                                title = "Pantalla retro",
+                                options = listOf(0, 1, 2),
+                                selected = tvMode,
+                                label = {
+                                    when (it) {
+                                        1 -> "TV de tubo"
+                                        2 -> "VHS"
+                                        else -> "Apagado"
+                                    }
+                                },
+                                onSelect = {
+                                    val wasOff = tvMode == 0
+                                    tvMode = it
+                                    prefs.tvMode = it
+                                    if (wasOff && it != 0) {
+                                        scope.launch {
+                                            tvPower.snapTo(0f)
+                                            tvPower.animateTo(1f, tween(480))
+                                        }
+                                    }
+                                }
+                            )
+                            if (tvMode != 0) {
+                                OptionSwitch(
+                                    title = "Estática al cambiar de archivo",
+                                    subtitle = "Efecto de cambio de canal entre un archivo y otro.",
+                                    checked = tvStatic,
+                                    onChange = {
+                                        tvStatic = it
+                                        prefs.tvStatic = it
+                                    }
+                                )
+                            }
+                            OptionSwitch(
+                                title = "Ambiente",
+                                subtitle = "Fondo difuminado con los colores del contenido (no se usa con pantalla retro).",
+                                checked = ambient,
+                                onChange = {
+                                    ambient = it
+                                    prefs.ambient = it
+                                }
+                            )
+                            OptionSwitch(
+                                title = "Efecto Ken Burns",
+                                subtitle = "Movimiento lento en las imágenes de la presentación. Se pausa con el zoom.",
+                                checked = kenBurns,
+                                onChange = {
+                                    kenBurns = it
+                                    prefs.kenBurns = it
+                                }
+                            )
+                            ChipRow(
+                                title = "Deslizar para cambiar",
+                                options = listOf(true, false),
+                                selected = verticalFeed,
+                                label = { if (it) "Vertical" else "Horizontal" },
+                                onSelect = {
+                                    verticalFeed = it
+                                    prefs.feedVertical = it
+                                }
+                            )
+                        }
+                        else -> {
+                            OptionSwitch(
+                                title = "Modo feed",
+                                subtitle = "Sin avance automático: las imágenes se quedan hasta que deslizás y los videos se repiten en bucle.",
+                                checked = feedMode,
+                                onChange = {
+                                    feedMode = it
+                                    prefs.feedMode = it
+                                }
+                            )
+                            ChipRow(
+                                title = "Duración de cada imagen",
+                                options = listOf(2, 3, 5, 8, 10, 15, 30, 60),
+                                selected = seconds,
+                                label = { "$it s" },
+                                onSelect = {
+                                    seconds = it
+                                    prefs.imageSeconds = it
+                                }
+                            )
+                            ChipRow(
+                                title = "Velocidad de video",
+                                options = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f),
+                                selected = speed,
+                                label = { "${it}x" },
+                                onSelect = {
+                                    speed = it
+                                    prefs.speed = it
+                                }
+                            )
+                            ChipRow(
+                                title = "Temporizador de apagado",
+                                options = listOf(0, 15, 30, 45, 60, 90),
+                                selected = sleepMinutes,
+                                label = { if (it == 0) "Apagado" else "$it min" },
+                                onSelect = { sleepMinutes = it }
+                            )
+                            OptionSwitch(
+                                title = "Seguir reproduciendo en segundo plano",
+                                subtitle = "Solo videos. Muestra una notificación mientras suena.",
+                                checked = bgPlayback,
+                                onChange = { value ->
+                                    bgPlayback = value
+                                    prefs.bgPlayback = value
+                                    if (value && Build.VERSION.SDK_INT >= 33) {
+                                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                }
+                            )
+                            if (itemAt(settled()).isVideo) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = {
+                                        showOptions = false
+                                        subtitleLauncher.launch(arrayOf("*/*"))
+                                    }) { Text("Cargar subtítulos") }
+                                    if (prefs.getSubtitle(itemAt(settled()).uri) != null) {
+                                        OutlinedButton(onClick = {
+                                            prefs.setSubtitle(itemAt(settled()).uri, null)
+                                            showOptions = false
+                                            tick++
+                                        }) { Text("Quitar subtítulos") }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Consejos de gestos (solo la primera vez) ----
+        AnimatedVisibility(
+            visible = showTips && !inPip,
+            enter = fadeIn(tween(220)),
+            exit = fadeOut(tween(180))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0xE60B0B0D))
+                    .clickable {
+                        showTips = false
+                        prefs.tipsSeen = true
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text("Gestos del reproductor", style = MaterialTheme.typography.titleLarge, color = MixColors.Bone)
+                    listOf(
+                        "Deslizá para cambiar de archivo",
+                        "Pellizcá para ampliar; doble toque para hacer zoom en imágenes",
+                        "Doble toque en un video: salta 10 s hacia cada lado",
+                        "Mantené presionado un video: velocidad 2×",
+                        "Arrastrá de costado sobre un video: adelantar o retroceder",
+                        "Tocá la pantalla: muestra u oculta los controles"
+                    ).forEach {
+                        Text("•  $it", style = MaterialTheme.typography.bodyLarge, color = MixColors.Bone)
+                    }
+                    Text("Tocá para continuar", style = MaterialTheme.typography.labelLarge, color = MixColors.PinkSoft)
+                }
             }
         }
     }
 }
+
+@Composable
+private fun GlassIconButton(
+    icon: ImageVector,
+    description: String,
+    tint: Color = Color.White,
+    size: Dp = 42.dp,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(size).background(Color(0x66000000), CircleShape)
+    ) {
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun FilterCard(type: ColorFilterType, selected: Boolean, request: ImageRequest, onClick: () -> Unit) {
+    val cf = remember(type) { type.values?.let { ColorFilter.colorMatrix(ComposeColorMatrix(it)) } }
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        Modifier.width(78.dp).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier
+                .size(78.dp)
+                .clip(shape)
+                .border(if (selected) 2.dp else 0.5.dp, if (selected) MixColors.Pink else Color(0x33FFFFFF), shape)
+        ) {
+            AsyncImage(
+                model = request,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                colorFilter = cf,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(Modifier.align(Alignment.BottomEnd).padding(5.dp)) { SwatchDot(type, 14.dp) }
+        }
+        Text(
+            text = type.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) MixColors.Pink else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
+/** Bordes suaves entre la imagen y el fondo difuminado (modo Ambiente). */
+private fun featherModifier(img: Size): Modifier = Modifier
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        if (img.width > 0f && img.height > 0f) {
+            val sc = minOf(size.width / img.width, size.height / img.height)
+            val w = img.width * sc
+            val h = img.height * sc
+            val l = (size.width - w) / 2f
+            val t = (size.height - h) / 2f
+            val f = 18.dp.toPx()
+            if (t > 1f) {
+                drawRect(
+                    Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = t, endY = t + f),
+                    topLeft = Offset(l, t),
+                    size = Size(w, f),
+                    blendMode = BlendMode.DstOut
+                )
+                drawRect(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = t + h - f, endY = t + h),
+                    topLeft = Offset(l, t + h - f),
+                    size = Size(w, f),
+                    blendMode = BlendMode.DstOut
+                )
+            }
+            if (l > 1f) {
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), startX = l, endX = l + f),
+                    topLeft = Offset(l, t),
+                    size = Size(f, h),
+                    blendMode = BlendMode.DstOut
+                )
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), startX = l + w - f, endX = l + w),
+                    topLeft = Offset(l + w - f, t),
+                    size = Size(f, h),
+                    blendMode = BlendMode.DstOut
+                )
+            }
+        }
+    }
+
+private fun itemAt0(queue: List<QueueItem>, order: List<Int>, page: Int): QueueItem =
+    queue[order[page.coerceIn(0, order.size - 1)]]
 
 @Composable
 private fun OptionSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -1546,19 +1830,19 @@ private fun swatchOf(t: ColorFilterType): Long = when (t) {
 }
 
 @Composable
-private fun SwatchDot(type: ColorFilterType) {
+private fun SwatchDot(type: ColorFilterType, size: Dp = 16.dp) {
     val base = Color(swatchOf(type))
     val shape = androidx.compose.foundation.shape.CircleShape
     if (type == ColorFilterType.NONE) {
         Box(
             Modifier
-                .size(16.dp)
+                .size(size)
                 .border(1.5.dp, base, shape)
         )
     } else {
         Box(
             Modifier
-                .size(16.dp)
+                .size(size)
                 .clip(shape)
                 .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.55f).compositeOver(base), base)))
                 .border(0.5.dp, Color.White.copy(alpha = 0.25f), shape)

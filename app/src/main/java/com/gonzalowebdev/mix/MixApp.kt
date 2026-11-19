@@ -19,5 +19,6 @@ class MixApp : Application(), ImageLoaderFactory {
                 if (Build.VERSION.SDK_INT >= 28) add(ImageDecoderDecoder.Factory()) else add(GifDecoder.Factory())
                 add(VideoFrameDecoder.Factory())
             }
+            .crossfade(true)
             .build()
 }

@@ -6,6 +6,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -34,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
@@ -117,7 +121,13 @@ fun MixRoot(
                         onPlay = { nav.navigate("player") }
                     )
                 }
-                composable("player") {
+                composable(
+                    route = "player",
+                    enterTransition = { fadeIn(tween(240)) + scaleIn(tween(280), initialScale = 0.92f) },
+                    exitTransition = { fadeOut(tween(160)) },
+                    popEnterTransition = { fadeIn(tween(200)) },
+                    popExitTransition = { fadeOut(tween(220)) + scaleOut(tween(240), targetScale = 0.94f) }
+                ) {
                     PlayerScreen(vm = vm, onClose = { nav.popBackStack() })
                 }
             }
@@ -148,6 +158,7 @@ private fun goTab(nav: androidx.navigation.NavController, route: String) {
 @Composable
 private fun FloatingNav(tabs: List<Tab>, current: String?, onSelect: (Tab) -> Unit) {
     val pink = MixColors.Pink
+    val haptic = LocalHapticFeedback.current
     Box(
         Modifier
             .fillMaxWidth()
@@ -175,7 +186,10 @@ private fun FloatingNav(tabs: List<Tab>, current: String?, onSelect: (Tab) -> Un
                     Modifier
                         .clip(RoundedCornerShape(26.dp))
                         .background(bg)
-                        .clickable { onSelect(tab) }
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onSelect(tab)
+                        }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
