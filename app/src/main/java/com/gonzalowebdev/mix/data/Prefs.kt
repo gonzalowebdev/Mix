@@ -1,6 +1,8 @@
 package com.gonzalowebdev.mix.data
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("mix", Context.MODE_PRIVATE)
@@ -69,6 +71,84 @@ class Prefs(context: Context) {
     var ambient: Boolean
         get() = sp.getBoolean("ambient", false)
         set(v) = sp.edit().putBoolean("ambient", v).apply()
+
+    var hiddenMemories: Set<String>
+        get() = (sp.getStringSet("hiddenMemories", emptySet()) ?: emptySet()).toSet()
+        set(v) = sp.edit().putStringSet("hiddenMemories", v).apply()
+
+    var pinnedMemories: Set<String>
+        get() = (sp.getStringSet("pinnedMemories", emptySet()) ?: emptySet()).toSet()
+        set(v) = sp.edit().putStringSet("pinnedMemories", v).apply()
+
+    /** Día en que se generaron los recuerdos y qué ids se mostraron hoy / ayer. */
+    var memDay: String
+        get() = sp.getString("memDay", "") ?: ""
+        set(v) = sp.edit().putString("memDay", v).apply()
+
+    var memIds: Set<String>
+        get() = (sp.getStringSet("memIds", emptySet()) ?: emptySet()).toSet()
+        set(v) = sp.edit().putStringSet("memIds", v).apply()
+
+    var memPrev: Set<String>
+        get() = (sp.getStringSet("memPrev", emptySet()) ?: emptySet()).toSet()
+        set(v) = sp.edit().putStringSet("memPrev", v).apply()
+
+    var recentSearches: List<String>
+        get() = (sp.getString("recentSearches", "") ?: "").split("\n").filter { it.isNotBlank() }
+        set(v) = sp.edit().putString("recentSearches", v.joinToString("\n")).apply()
+
+    /** Estilos visuales guardados (JSON). */
+    var stylesJson: String
+        get() = sp.getString("stylesJson", "[]") ?: "[]"
+        set(v) = sp.edit().putString("stylesJson", v).apply()
+
+    var autoUpdateCheck: Boolean
+        get() = sp.getBoolean("autoUpdateCheck", false)
+        set(v) = sp.edit().putBoolean("autoUpdateCheck", v).apply()
+
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0L)
+        set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
+
+    /** Copia de todos los ajustes (para el respaldo). */
+    fun dumpJson(): JSONObject {
+        val out = JSONObject()
+        for ((k, v) in sp.all) {
+            val e = JSONObject()
+            when (v) {
+                is Boolean -> { e.put("t", "b"); e.put("v", v) }
+                is Int -> { e.put("t", "i"); e.put("v", v) }
+                is Long -> { e.put("t", "l"); e.put("v", v) }
+                is Float -> { e.put("t", "f"); e.put("v", v.toDouble()) }
+                is String -> { e.put("t", "z"); e.put("v", v) }
+                is Set<*> -> { e.put("t", "s"); e.put("v", JSONArray(v.map { it.toString() })) }
+                else -> continue
+            }
+            out.put(k, e)
+        }
+        return out
+    }
+
+    fun restoreJson(json: JSONObject) {
+        val ed = sp.edit()
+        val keys = json.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val e = json.getJSONObject(k)
+            when (e.getString("t")) {
+                "b" -> ed.putBoolean(k, e.getBoolean("v"))
+                "i" -> ed.putInt(k, e.getInt("v"))
+                "l" -> ed.putLong(k, e.getLong("v"))
+                "f" -> ed.putFloat(k, e.getDouble("v").toFloat())
+                "z" -> ed.putString(k, e.getString("v"))
+                "s" -> {
+                    val arr = e.getJSONArray("v")
+                    ed.putStringSet(k, (0 until arr.length()).map { arr.getString(it) }.toSet())
+                }
+            }
+        }
+        ed.apply()
+    }
 
     var tipsSeen: Boolean
         get() = sp.getBoolean("tipsSeen", false)

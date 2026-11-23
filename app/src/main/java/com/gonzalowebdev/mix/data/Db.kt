@@ -46,6 +46,12 @@ data class PlaylistItemEntity(
     fun toQueueItem() = QueueItem(uri, name, isVideo, durationMs)
 }
 
+data class PreviewRow(
+    val playlistId: Long,
+    val uri: String,
+    val isVideo: Boolean
+)
+
 data class PlaylistWithCount(
     @Embedded val playlist: PlaylistEntity,
     val itemCount: Int
@@ -59,6 +65,9 @@ abstract class PlaylistDao {
             "FROM playlists p ORDER BY p.createdAt DESC"
     )
     abstract fun playlists(): Flow<List<PlaylistWithCount>>
+
+    @Query("SELECT playlistId, uri, isVideo FROM playlist_items WHERE position < 4 ORDER BY playlistId, position")
+    abstract fun previews(): Flow<List<PreviewRow>>
 
     @Query("SELECT * FROM playlists WHERE id = :id")
     abstract fun playlist(id: Long): Flow<PlaylistEntity?>

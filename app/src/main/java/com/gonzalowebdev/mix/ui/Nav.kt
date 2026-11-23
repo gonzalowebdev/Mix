@@ -94,8 +94,25 @@ fun MixRoot(
                     LibraryScreen(
                         vm = vm,
                         onPlay = { nav.navigate("player") },
-                        onFolders = { goTab(nav, "folders") }
+                        onFolders = { goTab(nav, "folders") },
+                        onCleanup = { nav.navigate("cleanup") },
+                        onTrash = { nav.navigate("trash") },
+                        onSettings = { nav.navigate("settings") }
                     )
+                }
+                composable("settings") {
+                    SettingsScreen(
+                        vm = vm,
+                        onBack = { nav.popBackStack() },
+                        onCleanup = { nav.navigate("cleanup") },
+                        onTrash = { nav.navigate("trash") }
+                    )
+                }
+                composable("cleanup") {
+                    CleanupScreen(vm = vm, onBack = { nav.popBackStack() })
+                }
+                composable("trash") {
+                    TrashScreen(vm = vm, onBack = { nav.popBackStack() })
                 }
                 composable("memories") {
                     MemoriesScreen(vm = vm, onPlay = { nav.navigate("player") })

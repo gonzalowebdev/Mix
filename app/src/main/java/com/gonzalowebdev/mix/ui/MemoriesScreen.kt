@@ -1,6 +1,8 @@
 package com.gonzalowebdev.mix.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,13 +15,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +49,8 @@ import com.gonzalowebdev.mix.data.Memory
 fun MemoriesScreen(vm: MixViewModel, onPlay: () -> Unit) {
     val inset = LocalNavInset.current
     val memories = vm.memories
+
+    LaunchedEffect(memories.map { it.id }) { vm.recordMemoriesShown() }
 
     Scaffold(
         topBar = {
@@ -62,25 +73,54 @@ fun MemoriesScreen(vm: MixViewModel, onPlay: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 items(memories, key = { it.id }) { m ->
-                    MemoryCard(
-                        memory = m,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(1.6f),
-                        onClick = {
-                            vm.playMemory(m)
-                            onPlay()
+                    var menu by remember { mutableStateOf(false) }
+                    Box {
+                        MemoryCard(
+                            memory = m,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1.6f),
+                            onLongClick = { menu = true },
+                            onClick = {
+                                vm.playMemory(m)
+                                onPlay()
+                            }
+                        )
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(if (m.pinned) "Quitar de fijados" else "Fijar al inicio") },
+                                onClick = {
+                                    menu = false
+                                    vm.togglePinMemory(m.id)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Ocultar este recuerdo") },
+                                onClick = {
+                                    menu = false
+                                    vm.hideMemory(m.id)
+                                }
+                            )
                         }
-                    )
+                    }
+                }
+                if (vm.hiddenMemories.isNotEmpty()) {
+                    item(key = "hidden") {
+                        TextButton(onClick = { vm.unhideAllMemories() }) {
+                            Text("Mostrar recuerdos ocultos (${vm.hiddenMemories.size})")
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MemoryCard(
     memory: Memory,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -95,7 +135,7 @@ fun MemoryCard(
         modifier
             .clip(RoundedCornerShape(if (compact) 18.dp else 24.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         AsyncImage(
             model = request,
@@ -108,6 +148,18 @@ fun MemoryCard(
                 .fillMaxSize()
                 .background(Brush.verticalGradient(0.4f to Color.Transparent, 1f to Color(0xE60B0B0D)))
         )
+        if (memory.pinned) {
+            Text(
+                text = "Fijado",
+                style = MaterialTheme.typography.labelSmall,
+                color = MixColors.Black,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp)
+                    .background(MixColors.Pink, RoundedCornerShape(50))
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
         Column(
             Modifier
                 .align(Alignment.BottomStart)

@@ -26,7 +26,19 @@ import com.gonzalowebdev.mix.data.QueueItem
 import com.gonzalowebdev.mix.data.SmartList
 import com.gonzalowebdev.mix.data.SortField
 import com.gonzalowebdev.mix.data.TypeFilter
+import androidx.core.content.pm.PackageInfoCompat
+import com.gonzalowebdev.mix.data.MediaAnalysis
+import com.gonzalowebdev.mix.data.MediaAnalyzer
+import com.gonzalowebdev.mix.data.UpdateChecker
+import com.gonzalowebdev.mix.data.UpdateInfo
+import com.gonzalowebdev.mix.data.UpdateResult
+import com.gonzalowebdev.mix.data.VisualStyle
+import com.gonzalowebdev.mix.data.findDuplicateGroups
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -41,6 +53,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
     private val repo = MediaRepository(app)
     private val dao = (app as MixApp).db.dao()
+    private val analysisDao = app.analysisDb.dao()
 
     // ---------- Biblioteca ----------
     var allMedia by mutableStateOf<List<MediaFile>>(emptyList())
@@ -197,6 +210,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
                 allMedia = device + extras
                 if (folderFilter != null && folderFilter !in folders) folderFilter = null
                 loadedOnce = true
+                startAnalysis()
             } finally {
                 loading = false
             }
@@ -215,13 +229,295 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSelection() = selected.clear()
 
     // ---------- Recuerdos ----------
+    private val todayStr = LocalDate.now().toString()
+    private val avoidIds: Set<String> = if (prefs.memDay == todayStr) prefs.memPrev else prefs.memIds
+
+    var hiddenMemories by mutableStateOf(prefs.hiddenMemories)
+        private set
+    var pinnedMemories by mutableStateOf(prefs.pinnedMemories)
+        private set
+
     val memories: List<Memory> by derivedStateOf {
-        MemoryGenerator.generate(scopedMedia, favorites, LocalDate.now())
+        MemoryGenerator.generate(
+            scopedMedia, favorites, LocalDate.now(), analysis, avoidIds, hiddenMemories, pinnedMemories
+        )
+    }
+
+    /** Presentación inicial ("Un día como hoy · hace 3 años") del recuerdo que se está reproduciendo. */
+    var memoryIntro by mutableStateOf<Memory?>(null)
+        private set
+
+    fun takeIntro(): Memory? {
+        val m = memoryIntro
+        memoryIntro = null
+        return m
     }
 
     fun playMemory(memory: Memory) {
         playQueue(memory.files.map { it.toQueueItem() }, 0)
+        memoryIntro = memory
     }
+
+    /** Guarda qué recuerdos se mostraron hoy, para no repetirlos mañana. */
+    fun recordMemoriesShown() {
+        val ids = memories.map { it.id }.toSet()
+        if (ids.isEmpty()) return
+        if (prefs.memDay != todayStr) {
+            prefs.memPrev = prefs.memIds
+            prefs.memDay = todayStr
+        }
+        prefs.memIds = ids
+    }
+
+    fun hideMemory(id: String) {
+        hiddenMemories = hiddenMemories + id
+        pinnedMemories = pinnedMemories - id
+        prefs.hiddenMemories = hiddenMemories
+        prefs.pinnedMemories = pinnedMemories
+    }
+
+    fun togglePinMemory(id: String) {
+        pinnedMemories = if (id in pinnedMemories) pinnedMemories - id else pinnedMemories + id
+        prefs.pinnedMemories = pinnedMemories
+    }
+
+    fun unhideAllMemories() {
+        hiddenMemories = emptySet()
+        prefs.hiddenMemories = hiddenMemories
+    }
+
+    // ---------- Análisis de imágenes (nitidez y duplicados), sin IA ----------
+    var analysis by mutableStateOf<Map<String, MediaAnalysis>>(emptyMap())
+        private set
+    var analyzing by mutableStateOf(false)
+        private set
+    var analysisDone by mutableIntStateOf(0)
+        private set
+    var analysisTotal by mutableIntStateOf(0)
+        private set
+    var duplicateGroups by mutableStateOf<List<List<MediaFile>>>(emptyList())
+        private set
+    private var analysisJob: Job? = null
+
+    fun startAnalysis() {
+        if (analysisJob?.isActive == true) return
+        analysisJob = viewModelScope.launch(Dispatchers.Default) {
+            withContext(Dispatchers.Main) { analyzing = true }
+            val known = analysisDao.all().associateBy { it.uri }.toMutableMap()
+            val images = withContext(Dispatchers.Main) { allMedia.filter { !it.isVideo } }
+            val todo = images.filter { it.key !in known }
+            val first = known.toMap()
+            withContext(Dispatchers.Main) {
+                analysis = first
+                analysisTotal = todo.size
+                analysisDone = 0
+            }
+            val batch = ArrayList<MediaAnalysis>()
+            var sinceUi = 0
+            for ((i, f) in todo.withIndex()) {
+                ensureActive()
+                val a = MediaAnalyzer.analyze(getApplication(), f)
+                if (a != null) {
+                    batch += a
+                    known[a.uri] = a
+                }
+                sinceUi++
+                if (batch.size >= 50) {
+                    analysisDao.insertAll(batch.toList())
+                    batch.clear()
+                }
+                if (sinceUi >= 300) {
+                    sinceUi = 0
+                    val snap = known.toMap()
+                    withContext(Dispatchers.Main) {
+                        analysis = snap
+                        analysisDone = i + 1
+                    }
+                }
+                yield()
+            }
+            if (batch.isNotEmpty()) analysisDao.insertAll(batch.toList())
+            val snap = known.toMap()
+            withContext(Dispatchers.Main) {
+                analysis = snap
+                analysisDone = todo.size
+                analyzing = false
+            }
+            val media = withContext(Dispatchers.Main) { allMedia }
+            val favs = withContext(Dispatchers.Main) { favorites }
+            val groups = findDuplicateGroups(media, snap, favs)
+            withContext(Dispatchers.Main) { duplicateGroups = groups }
+        }
+    }
+
+    // ---------- Limpieza ----------
+    val screenshots: List<MediaFile> by derivedStateOf {
+        allMedia.filter { it.isScreenshot }.sortedByDescending { it.size }
+    }
+    val blurry: List<MediaFile> by derivedStateOf {
+        allMedia.filter {
+            !it.isVideo && !it.isScreenshot && it.key !in favorites &&
+                (analysis[it.key]?.sharp ?: Float.MAX_VALUE) < MemoryGenerator.BLUR_THRESHOLD
+        }.sortedBy { analysis[it.key]?.sharp ?: 0f }
+    }
+    val heavyVideos: List<MediaFile> by derivedStateOf {
+        allMedia.filter { it.isVideo && it.size >= 100L * 1024 * 1024 }.sortedByDescending { it.size }
+    }
+
+    // ---------- Papelera ----------
+    var trashed by mutableStateOf<List<MediaFile>>(emptyList())
+        private set
+    var trashLoading by mutableStateOf(false)
+        private set
+
+    fun loadTrash() {
+        viewModelScope.launch {
+            trashLoading = true
+            try {
+                trashed = repo.loadTrashed().sortedBy { it.expires }
+            } finally {
+                trashLoading = false
+            }
+        }
+    }
+
+    fun onTrashChanged() {
+        loadTrash()
+        refresh()
+    }
+
+    // ---------- Estilos visuales guardados ----------
+    var styles by mutableStateOf(loadStyles())
+        private set
+
+    private fun loadStyles(): List<VisualStyle> = try {
+        val arr = JSONArray(prefs.stylesJson)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            VisualStyle(
+                name = o.getString("name"),
+                filter = o.getString("filter"),
+                mirror = o.getInt("mirror"),
+                tvMode = o.getInt("tv"),
+                tvStatic = o.getBoolean("static"),
+                ambient = o.getBoolean("ambient"),
+                kenBurns = o.getBoolean("kb")
+            )
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun saveStyles(list: List<VisualStyle>) {
+        styles = list
+        val arr = JSONArray()
+        for (st in list) {
+            val o = JSONObject()
+            o.put("name", st.name)
+            o.put("filter", st.filter)
+            o.put("mirror", st.mirror)
+            o.put("tv", st.tvMode)
+            o.put("static", st.tvStatic)
+            o.put("ambient", st.ambient)
+            o.put("kb", st.kenBurns)
+            arr.put(o)
+        }
+        prefs.stylesJson = arr.toString()
+    }
+
+    fun saveStyle(style: VisualStyle) {
+        saveStyles(styles.filter { !it.name.equals(style.name, true) } + style)
+    }
+
+    fun deleteStyle(name: String) = saveStyles(styles.filter { it.name != name })
+
+    // ---------- Búsquedas recientes y sugerencias ----------
+    var recentSearches by mutableStateOf(prefs.recentSearches)
+        private set
+
+    val folderSuggestions: List<String> by derivedStateOf {
+        scopedMedia.groupBy { it.folder }.entries
+            .sortedByDescending { it.value.size }
+            .take(6)
+            .map { it.key }
+    }
+
+    fun rememberSearch(q: String) {
+        val t = q.trim()
+        if (t.length < 2) return
+        recentSearches = (listOf(t) + recentSearches.filter { !it.equals(t, true) }).take(8)
+        prefs.recentSearches = recentSearches
+    }
+
+    fun removeRecentSearch(q: String) {
+        recentSearches = recentSearches.filter { it != q }
+        prefs.recentSearches = recentSearches
+    }
+
+    // ---------- Selección arrastrando el dedo ----------
+    val visibleKeys: Set<String> by derivedStateOf { visible.map { it.key }.toHashSet() }
+
+    /** Devuelve true si el gesto va a seleccionar (false: va a quitar de la selección). */
+    fun dragSelectStart(key: String): Boolean {
+        if (key !in visibleKeys) return true
+        val add = key !in selected
+        setSelected(key, add)
+        return add
+    }
+
+    fun dragSelectEnter(key: String, add: Boolean) {
+        if (key in visibleKeys) setSelected(key, add)
+    }
+
+    private fun setSelected(key: String, add: Boolean) {
+        if (add) {
+            if (key !in selected) selected.add(key)
+        } else {
+            selected.remove(key)
+        }
+    }
+
+    // ---------- Actualizaciones ----------
+    var pendingUpdate by mutableStateOf<UpdateInfo?>(null)
+    var updateStatus by mutableStateOf("")
+        private set
+    var checkingUpdate by mutableStateOf(false)
+        private set
+
+    fun currentBuild(): Int = try {
+        val app = getApplication<Application>()
+        PackageInfoCompat.getLongVersionCode(app.packageManager.getPackageInfo(app.packageName, 0)).toInt()
+    } catch (e: Exception) {
+        0
+    }
+
+    fun checkUpdate(manual: Boolean) {
+        viewModelScope.launch {
+            checkingUpdate = true
+            when (val r = UpdateChecker.check(currentBuild())) {
+                is UpdateResult.Available -> {
+                    pendingUpdate = r.info
+                    updateStatus = "Hay una versión nueva: ${r.info.tag}"
+                }
+                UpdateResult.UpToDate -> if (manual) updateStatus = "Ya tenés la última versión"
+                UpdateResult.Error -> if (manual) updateStatus = "No se pudo consultar. Revisá tu conexión"
+            }
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            checkingUpdate = false
+        }
+    }
+
+    /** Si la persona lo activó, consulta como máximo una vez por día. */
+    fun autoCheckUpdate() {
+        if (prefs.autoUpdateCheck && System.currentTimeMillis() - prefs.lastUpdateCheck > 24L * 3600_000L) {
+            checkUpdate(false)
+        }
+    }
+
+    // ---------- Vistas previas de las listas (portadas en collage) ----------
+    val playlistPreviews = dao.previews()
+        .map { rows -> rows.groupBy { it.playlistId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     // ---------- Archivos eliminados ----------
     /** Limpia favoritos, listas, cola y biblioteca cuando se mueven a la papelera o se eliminan. */
@@ -235,6 +531,8 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         }
         queue = queue.filter { it.uri !in keys }
         keys.forEach { prefs.clearPosition(it) }
+        duplicateGroups = duplicateGroups.map { g -> g.filter { it.key !in keys } }.filter { it.size >= 2 }
+        viewModelScope.launch { keys.toList().chunked(500).forEach { analysisDao.delete(it) } }
         viewModelScope.launch {
             keys.toList().chunked(500).forEach { dao.deleteItemsByUri(it) }
         }
@@ -285,6 +583,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun playFromLibrary(file: MediaFile) {
+        if (query.isNotBlank()) rememberSearch(query)
         val list = visible
         playQueue(list.map { it.toQueueItem() }, list.indexOfFirst { it.key == file.key })
     }
@@ -420,7 +719,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------- Exportar / importar listas ----------
-    private suspend fun exportJson(): String {
+    private suspend fun exportJson(includePrefs: Boolean): String {
         val lists = dao.allPlaylists()
         val grouped = dao.allItems().groupBy { it.playlistId }
         val root = JSONObject()
@@ -444,13 +743,14 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         }
         root.put("playlists", arr)
         root.put("smartLists", smartToJson(smartLists))
+        if (includePrefs) root.put("prefs", prefs.dumpJson())
         return root.toString(2)
     }
 
-    fun exportTo(uri: Uri, onDone: (Boolean) -> Unit) {
+    fun exportTo(uri: Uri, includePrefs: Boolean = false, onDone: (Boolean) -> Unit) {
         viewModelScope.launch {
             val ok = try {
-                val json = exportJson()
+                val json = exportJson(includePrefs)
                 withContext(Dispatchers.IO) {
                     val out = getApplication<Application>().contentResolver.openOutputStream(uri, "w")
                         ?: throw IllegalStateException("sin salida")
@@ -504,7 +804,30 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
             tmp.forEachIndexed { index, s -> incoming += s.copy(id = System.nanoTime() + index) }
             if (incoming.isNotEmpty()) saveSmart(smartLists + incoming)
         }
+        if (root.has("prefs")) {
+            prefs.restoreJson(root.getJSONObject("prefs"))
+            withContext(Dispatchers.Main) { reloadFromPrefs() }
+        }
         return count
+    }
+
+    /** Vuelve a leer los ajustes guardados después de importar un respaldo. */
+    private fun reloadFromPrefs() {
+        favorites = prefs.favorites
+        mosaic = prefs.mosaic
+        smartLists = loadSmart()
+        styles = loadStyles()
+        hiddenMemories = prefs.hiddenMemories
+        pinnedMemories = prefs.pinnedMemories
+        recentSearches = prefs.recentSearches
+        useAllFolders = prefs.useAllFolders
+        selectedFolders = prefs.selectedFolders
+        typeFilter = try { TypeFilter.valueOf(prefs.typeFilter) } catch (e: Exception) { TypeFilter.ALL }
+        sortField = try { SortField.valueOf(prefs.sortField) } catch (e: Exception) { SortField.RANDOM }
+        sortAsc = prefs.sortAsc
+        favoritesOnly = prefs.favoritesOnly
+        folderFilter = prefs.folderFilter
+        refresh()
     }
 
     private fun loadSmartFrom(arr: JSONArray): List<SmartList> = try {

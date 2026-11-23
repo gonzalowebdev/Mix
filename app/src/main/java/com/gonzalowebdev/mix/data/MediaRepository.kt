@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +31,16 @@ class MediaRepository(private val context: Context) {
         }
     }
 
-    private fun query(video: Boolean): List<MediaFile> {
+    /** Archivos en la papelera del sistema (Android 11 o superior). */
+    suspend fun loadTrashed(): List<MediaFile> = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT < 30) {
+            emptyList()
+        } else {
+            query(video = false, trashed = true) + query(video = true, trashed = true)
+        }
+    }
+
+    private fun query(video: Boolean, trashed: Boolean = false): List<MediaFile> {
         val base = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
@@ -59,7 +70,16 @@ class MediaRepository(private val context: Context) {
         )
 
         val result = ArrayList<MediaFile>()
-        context.contentResolver.query(base, projection, null, null, null)?.use { c ->
+        val cursor = if (trashed && Build.VERSION.SDK_INT >= 30) {
+            val args = Bundle().apply {
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_ONLY)
+            }
+            context.contentResolver.query(base, projection + "date_expires", args, null)
+        } else {
+            context.contentResolver.query(base, projection, null, null, null)
+        }
+        cursor?.use { c ->
+            val expCol = c.getColumnIndex("date_expires")
             val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
@@ -90,7 +110,8 @@ class MediaRepository(private val context: Context) {
                     width = if (wCol >= 0) c.getInt(wCol) else 0,
                     height = if (hCol >= 0) c.getInt(hCol) else 0,
                     dateTaken = if (taken > 0) taken else modified,
-                    realDate = taken > 0
+                    realDate = taken > 0,
+                    expires = if (expCol >= 0 && !c.isNull(expCol)) c.getLong(expCol) else 0L
                 )
             }
         }

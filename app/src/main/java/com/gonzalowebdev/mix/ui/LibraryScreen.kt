@@ -30,6 +30,25 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.items
@@ -113,7 +132,10 @@ private fun hasAccess(context: android.content.Context, perms: Array<String>): B
 fun LibraryScreen(
     vm: MixViewModel,
     onPlay: () -> Unit,
-    onFolders: () -> Unit
+    onFolders: () -> Unit,
+    onCleanup: () -> Unit,
+    onTrash: () -> Unit,
+    onSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val perms = remember { requiredPermissions() }
@@ -141,6 +163,8 @@ fun LibraryScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val selecting = vm.selected.isNotEmpty()
+
+    LaunchedEffect(Unit) { vm.autoCheckUpdate() }
 
     LaunchedEffect(searching) { if (searching && vm.query.isEmpty()) focus.requestFocus() }
 
@@ -257,6 +281,8 @@ fun LibraryScreen(
                                 onValueChange = { vm.query = it },
                                 placeholder = { Text("Buscar por nombre o carpeta") },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = { vm.rememberSearch(vm.query) }),
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
                                     unfocusedContainerColor = Color.Transparent,
@@ -317,6 +343,27 @@ fun LibraryScreen(
                                         }
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("Limpieza") },
+                                        onClick = {
+                                            topMenu = false
+                                            onCleanup()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Papelera") },
+                                        onClick = {
+                                            topMenu = false
+                                            onTrash()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Ajustes") },
+                                        onClick = {
+                                            topMenu = false
+                                            onSettings()
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Actualizar biblioteca") },
                                         onClick = {
                                             topMenu = false
@@ -360,6 +407,7 @@ fun LibraryScreen(
                 )
                 Box(Modifier.fillMaxSize()) {
                     when {
+                        searching && vm.query.isBlank() -> SearchSuggestions(vm)
                         vm.loading && vm.allMedia.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                         vm.visible.isEmpty() -> Text(
                             text = when {
@@ -370,11 +418,39 @@ fun LibraryScreen(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.align(Alignment.Center).padding(24.dp)
                         )
-                        else -> MediaGrid(vm, onPlay)
+                        else -> {
+                            var refreshing by remember { mutableStateOf(false) }
+                            PullToRefreshBox(
+                                isRefreshing = refreshing,
+                                onRefresh = {
+                                    refreshing = true
+                                    if (vm.sortField == SortField.RANDOM) vm.reshuffle() else vm.refresh()
+                                    scope.launch {
+                                        delay(700)
+                                        refreshing = false
+                                    }
+                                }
+                            ) { MediaGrid(vm, onPlay) }
+                        }
                     }
                 }
             }
         }
+    }
+
+    vm.pendingUpdate?.let { info ->
+        AlertDialog(
+            onDismissRequest = { vm.pendingUpdate = null },
+            title = { Text("Hay una versión nueva") },
+            text = { Text("Está disponible ${info.tag}. Se descarga desde el navegador y después la instalás.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.url)))
+                    vm.pendingUpdate = null
+                }) { Text("Descargar") }
+            },
+            dismissButton = { TextButton(onClick = { vm.pendingUpdate = null }) { Text("Más tarde") } }
+        )
     }
 
     if (confirmDelete) {
@@ -563,17 +639,43 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
     val selecting = selectedKeys.isNotEmpty()
     val favorites = vm.favorites
     val inset = LocalNavInset.current
+    val haptic = LocalHapticFeedback.current
     val memories = vm.memories
     val showMemories = memories.isNotEmpty() && vm.query.isBlank() && vm.typeFilter == TypeFilter.ALL &&
         vm.folderFilter == null && !vm.favoritesOnly
+    val staggeredState = rememberLazyStaggeredGridState()
+    val gridState = rememberLazyGridState()
+
+    val dragMod = Modifier.dragSelect(
+        keyAt = { pos ->
+            val key: Any? = if (vm.mosaic) {
+                staggeredState.layoutInfo.visibleItemsInfo.firstOrNull {
+                    pos.x >= it.offset.x && pos.x < it.offset.x + it.size.width &&
+                        pos.y >= it.offset.y && pos.y < it.offset.y + it.size.height
+                }?.key
+            } else {
+                gridState.layoutInfo.visibleItemsInfo.firstOrNull {
+                    pos.x >= it.offset.x && pos.x < it.offset.x + it.size.width &&
+                        pos.y >= it.offset.y && pos.y < it.offset.y + it.size.height
+                }?.key
+            }
+            (key as? String)?.takeIf { it in vm.visibleKeys }
+        },
+        onStart = { key ->
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            vm.dragSelectStart(key)
+        },
+        onEnter = { key, add -> vm.dragSelectEnter(key, add) }
+    )
 
     if (vm.mosaic) {
         LazyVerticalStaggeredGrid(
+            state = staggeredState,
             columns = StaggeredGridCells.Adaptive(150.dp),
             contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp + inset),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalItemSpacing = 6.dp,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().then(dragMod)
         ) {
             if (showMemories) {
                 item(key = "memories", span = StaggeredGridItemSpan.FullLine) {
@@ -594,18 +696,18 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
                             vm.playFromLibrary(file)
                             onPlay()
                         }
-                    },
-                    onLongClick = { vm.toggleSelect(file) }
+                    }
                 )
             }
         }
     } else {
         LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Adaptive(104.dp),
             contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp + inset),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().then(dragMod)
         ) {
             if (showMemories) {
                 item(key = "memories", span = { GridItemSpan(maxLineSpan) }) {
@@ -626,10 +728,52 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
                             vm.playFromLibrary(file)
                             onPlay()
                         }
-                    },
-                    onLongClick = { vm.toggleSelect(file) }
+                    }
                 )
             }
+        }
+    }
+}
+
+/** Búsquedas recientes y carpetas sugeridas, mientras la barra de búsqueda está vacía. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchSuggestions(vm: MixViewModel) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (vm.recentSearches.isNotEmpty()) {
+            Text("Recientes", style = MaterialTheme.typography.titleSmall, color = MixColors.Pink)
+            vm.recentSearches.forEach { q ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { vm.query = q }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(MixIcons.Search, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(q, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge)
+                    IconButton(onClick = { vm.removeRecentSearch(q) }) {
+                        Icon(MixIcons.Close, contentDescription = "Quitar de recientes", modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+        }
+        if (vm.folderSuggestions.isNotEmpty()) {
+            Text("Carpetas", style = MaterialTheme.typography.titleSmall, color = MixColors.Pink, modifier = Modifier.padding(top = 8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                vm.folderSuggestions.forEach { f ->
+                    AssistChip(onClick = { vm.query = f }, label = { Text(f) })
+                }
+            }
+        }
+        if (vm.recentSearches.isEmpty() && vm.folderSuggestions.isEmpty()) {
+            Text("Escribí para buscar por nombre o carpeta.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -642,9 +786,9 @@ private fun MediaCell(
     selected: Boolean,
     selecting: Boolean,
     favorite: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onClick: () -> Unit
 ) {
+    val isSelected = selected
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
@@ -667,14 +811,15 @@ private fun MediaCell(
             }
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .semantics(mergeDescendants = true) {
+                contentDescription = (if (file.isVideo) "Video " else "Imagen ") + file.name
+                this.selected = isSelected
+                role = Role.Button
+            }
             .combinedClickable(
                 interactionSource = interaction,
                 indication = null,
-                onClick = onClick,
-                onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onLongClick()
-                }
+                onClick = onClick
             )
     ) {
         AsyncImage(
@@ -725,6 +870,7 @@ private fun MediaCell(
 
 @Composable
 private fun MemoriesRow(vm: MixViewModel, memories: List<Memory>, onPlay: () -> Unit) {
+    LaunchedEffect(memories.map { it.id }) { vm.recordMemoriesShown() }
     Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
         Text(
             "Recuerdos",

@@ -5,6 +5,9 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+/** El número de versión sale del número de compilación de GitHub (build-N). */
+val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.gonzalowebdev.mix"
     compileSdk = 34
@@ -13,8 +16,8 @@ android {
         applicationId = "com.gonzalowebdev.mix"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = runNumber
+        versionName = "1.$runNumber"
     }
 
     signingConfigs {

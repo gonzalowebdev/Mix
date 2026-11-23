@@ -23,6 +23,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -165,6 +166,8 @@ import com.gonzalowebdev.mix.PlaybackService
 import com.gonzalowebdev.mix.R
 import com.gonzalowebdev.mix.data.ColorFilterType
 import com.gonzalowebdev.mix.data.MediaFile
+import com.gonzalowebdev.mix.data.PRESET_STYLES
+import com.gonzalowebdev.mix.data.VisualStyle
 import com.gonzalowebdev.mix.data.QueueItem
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -205,6 +208,8 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     val prefs = vm.prefs
     val scope = rememberCoroutineScope()
+    val introMemory = remember { vm.takeIntro() }
+    val memoryMode = introMemory != null
     val inPip = vm.inPip
     val playlists by vm.playlists.collectAsStateWithLifecycle()
     val favorites = vm.favorites
@@ -215,7 +220,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val pagerState = rememberPagerState(initialPage = initial.second) { order.size }
 
     var tick by remember { mutableIntStateOf(0) }
-    var playing by remember { mutableStateOf(true) }
+    var playing by remember { mutableStateOf(introMemory == null) }
     var finished by remember { mutableStateOf(false) }
     var shuffle by remember { mutableStateOf(prefs.shuffle) }
     var repeat by remember { mutableIntStateOf(prefs.repeatMode) }
@@ -258,7 +263,9 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     var ambient by remember { mutableStateOf(prefs.ambient) }
     var tvTime by remember { mutableFloatStateOf(0f) }
     val tvPower = remember { Animatable(1f) }
-    var showTips by remember { mutableStateOf(!prefs.tipsSeen) }
+    var showTips by remember { mutableStateOf(!prefs.tipsSeen && introMemory == null) }
+    var showIntro by remember { mutableStateOf(introMemory != null) }
+    var showSaveStyle by remember { mutableStateOf(false) }
     var optionsTab by remember { mutableIntStateOf(0) }
     var staticOn by remember { mutableStateOf(false) }
     val crt = remember { if (Build.VERSION.SDK_INT >= 33) CrtShader.create() else null }
@@ -500,6 +507,33 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
         }
     }
 
+    fun applyStyle(st: VisualStyle) {
+        filterType = try {
+            ColorFilterType.valueOf(st.filter)
+        } catch (e: Exception) {
+            ColorFilterType.NONE
+        }
+        prefs.colorFilter = filterType.name
+        mirror = st.mirror
+        prefs.mirror = st.mirror
+        val wasOff = tvMode == 0
+        tvMode = st.tvMode
+        prefs.tvMode = st.tvMode
+        tvStatic = st.tvStatic
+        prefs.tvStatic = st.tvStatic
+        ambient = st.ambient
+        prefs.ambient = st.ambient
+        kenBurns = st.kenBurns
+        prefs.kenBurns = st.kenBurns
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        if (wasOff && st.tvMode != 0) {
+            scope.launch {
+                tvPower.snapTo(0f)
+                tvPower.animateTo(1f, tween(480))
+            }
+        }
+    }
+
     // Eliminar (papelera del sistema o definitivo) y limpiar el feed
     val remover = rememberFileRemover { uris, ok ->
         if (ok) {
@@ -622,6 +656,14 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             controlsVisible = false
         }
     }
+    // Presentación del recuerdo: unos segundos con la portada y el título
+    LaunchedEffect(Unit) {
+        if (introMemory != null) {
+            delay(2600)
+            showIntro = false
+            playing = true
+        }
+    }
     LaunchedEffect(hintStamp) {
         if (hint.isNotEmpty()) {
             delay(700)
@@ -728,7 +770,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     val pageContent: @Composable (Int) -> Unit = { pg ->
         val pageItem = itemAt(pg)
         val isSettled = pg == pagerState.settledPage
-        val kbActive = kenBurns && !feedMode && isSettled && !pageItem.isVideo
+        val kbActive = (kenBurns || memoryMode) && !feedMode && isSettled && !pageItem.isVideo
         val variant = abs(pageItem.uri.hashCode()) % 3
         val kbDx = when (variant) {
             1 -> -0.03f
@@ -1374,10 +1416,13 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         .background(Color(0x44FFFFFF), RoundedCornerShape(2.dp))
                 )
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("Filtros", "Vista", "Reproducción").forEachIndexed { i, label ->
+                    listOf("Filtros", "Vista", "Reproducción", "Estilos").forEachIndexed { i, label ->
                         val sel = optionsTab == i
                         Text(
                             text = label,
@@ -1505,7 +1550,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                                 }
                             )
                         }
-                        else -> {
+                        2 -> {
                             OptionSwitch(
                                 title = "Modo feed",
                                 subtitle = "Sin avance automático: las imágenes se quedan hasta que deslizás y los videos se repiten en bucle.",
@@ -1571,7 +1616,96 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                             }
                             Spacer(Modifier.height(8.dp))
                         }
+                        else -> {
+                            OutlinedButton(onClick = { showSaveStyle = true }) { Text("Guardar estilo actual") }
+                            Text("Sugeridos", style = MaterialTheme.typography.titleSmall)
+                            PRESET_STYLES.forEach { st ->
+                                StyleRow(st, onApply = { applyStyle(st) }, onDelete = null)
+                            }
+                            if (vm.styles.isNotEmpty()) {
+                                Text("Mis estilos", style = MaterialTheme.typography.titleSmall)
+                                vm.styles.forEach { st ->
+                                    StyleRow(st, onApply = { applyStyle(st) }, onDelete = { vm.deleteStyle(st.name) })
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
                     }
+                }
+            }
+        }
+
+        if (showSaveStyle) {
+            TextInputDialog(
+                title = "Guardar estilo",
+                confirmLabel = "Guardar",
+                onConfirm = { name ->
+                    vm.saveStyle(VisualStyle(name, filterType.name, mirror, tvMode, tvStatic, ambient, kenBurns))
+                    showSaveStyle = false
+                    Toast.makeText(context, "Estilo \"$name\" guardado", Toast.LENGTH_SHORT).show()
+                },
+                onDismiss = { showSaveStyle = false }
+            )
+        }
+
+        // ---- Presentación del recuerdo ----
+        AnimatedVisibility(
+            visible = showIntro && introMemory != null && !inPip,
+            enter = fadeIn(tween(250)),
+            exit = fadeOut(tween(600))
+        ) {
+            var started by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { started = true }
+            val zoomIntro by animateFloatAsState(if (started) 1.12f else 1f, tween(3000), label = "introZoom")
+            val coverRequest = remember(introMemory?.cover?.key) {
+                ImageRequest.Builder(context)
+                    .data(introMemory?.cover?.uri)
+                    .size(1080)
+                    .apply { if (introMemory?.cover?.isVideo == true) videoFramePercent(0.1) }
+                    .build()
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            showIntro = false
+                            playing = true
+                        }
+                    }
+            ) {
+                AsyncImage(
+                    model = coverRequest,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = zoomIntro
+                        scaleY = zoomIntro
+                    }
+                )
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Brush.verticalGradient(listOf(Color(0x55000000), Color(0xCC000000))))
+                )
+                Column(
+                    Modifier.align(Alignment.Center).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = introMemory?.title ?: "",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MixColors.Bone,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Text(
+                        text = introMemory?.subtitle ?: "",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MixColors.PinkSoft,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
             }
         }
@@ -1619,7 +1753,7 @@ private fun GlassIconButton(
     icon: ImageVector,
     description: String,
     tint: Color = Color.White,
-    size: Dp = 42.dp,
+    size: Dp = 48.dp,
     onClick: () -> Unit
 ) {
     IconButton(
@@ -1897,6 +2031,48 @@ private fun StaticNoise() {
                 topLeft = Offset(x, y),
                 size = Size(rnd.nextFloat() * 40f + 4f, 3f)
             )
+        }
+    }
+}
+
+private fun styleSummary(st: VisualStyle): String {
+    val parts = ArrayList<String>()
+    val f = try {
+        ColorFilterType.valueOf(st.filter)
+    } catch (e: Exception) {
+        ColorFilterType.NONE
+    }
+    if (f != ColorFilterType.NONE) parts += f.label
+    if (st.mirror != 0) parts += "Espejo"
+    if (st.tvMode == 1) parts += "TV de tubo" else if (st.tvMode == 2) parts += "VHS"
+    if (st.ambient) parts += "Ambiente"
+    if (st.kenBurns) parts += "Ken Burns"
+    return if (parts.isEmpty()) "Sin efectos" else parts.joinToString(" · ")
+}
+
+@Composable
+private fun StyleRow(style: VisualStyle, onApply: () -> Unit, onDelete: (() -> Unit)?) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0x14FFFFFF))
+            .clickable(onClick = onApply)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(style.name, style = MaterialTheme.typography.titleSmall)
+            Text(
+                styleSummary(style),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (onDelete != null) {
+            IconButton(onClick = onDelete) {
+                Icon(MixIcons.Delete, contentDescription = "Eliminar estilo", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

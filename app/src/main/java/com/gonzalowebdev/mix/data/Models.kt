@@ -17,9 +17,23 @@ data class MediaFile(
     val isExtra: Boolean = false,
     /** Fecha en que se tomó (ms). Si realDate es false, es solo la fecha de modificación. */
     val dateTaken: Long = 0L,
-    val realDate: Boolean = false
+    val realDate: Boolean = false,
+    /** Solo en la papelera: cuándo se elimina sola (segundos desde 1970). */
+    val expires: Long = 0L
 ) {
     val key: String = uri.toString()
+
+    val isScreenshot: Boolean = folder.contains("screenshot", true) ||
+        folder.contains("captura", true) ||
+        name.startsWith("Screenshot", true) ||
+        name.contains("captura de pantalla", true)
+
+    /** Imágenes de mensajería: fechas poco confiables y mucho contenido descartable. */
+    val isMessagingJunk: Boolean = name.contains("-WA") ||
+        folder.contains("whatsapp", true) ||
+        folder.contains("telegram", true) ||
+        folder.contains("messenger", true)
+
     fun toQueueItem() = QueueItem(key, name, isVideo, durationMs)
 }
 
@@ -148,3 +162,20 @@ enum class ColorFilterType(val label: String, val values: FloatArray?) {
     VIVID("Vívido", saturation(1.7f)),
     NIGHT("Noche", tint(0.90f, 0.35f, 0.25f))
 }
+
+/** Combinación de ajustes visuales guardada con nombre. */
+data class VisualStyle(
+    val name: String,
+    val filter: String,
+    val mirror: Int,
+    val tvMode: Int,
+    val tvStatic: Boolean,
+    val ambient: Boolean,
+    val kenBurns: Boolean
+)
+
+val PRESET_STYLES = listOf(
+    VisualStyle("Noche de cine", "NOIR", 0, 0, false, false, true),
+    VisualStyle("Recuerdo cálido", "KODAK", 0, 0, false, true, true),
+    VisualStyle("Videoclub", "VINTAGE", 0, 2, true, false, false)
+)

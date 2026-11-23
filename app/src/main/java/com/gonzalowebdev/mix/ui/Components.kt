@@ -196,12 +196,14 @@ fun DeleteDialog(
     )
 }
 
+enum class FileAction { TRASH, DELETE, RESTORE }
+
 /**
- * Devuelve una función (uris, definitivo) que pide al sistema mover a la papelera
- * o eliminar. Devuelve false si ninguno de los archivos se puede eliminar desde Mix.
+ * Devuelve una función (uris, acción) que le pide al sistema mover a la papelera, eliminar
+ * definitivamente o restaurar. Devuelve false si ninguno de los archivos se puede tocar desde Mix.
  */
 @Composable
-fun rememberFileRemover(onResult: (List<Uri>, Boolean) -> Unit): (List<Uri>, Boolean) -> Boolean {
+fun rememberFileAction(onResult: (List<Uri>, Boolean) -> Unit): (List<Uri>, FileAction) -> Boolean {
     val context = LocalContext.current
     val callback by rememberUpdatedState(onResult)
     var pending by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -211,32 +213,45 @@ fun rememberFileRemover(onResult: (List<Uri>, Boolean) -> Unit): (List<Uri>, Boo
         callback(uris, result.resultCode == Activity.RESULT_OK)
     }
     return remember(launcher) {
-        { uris: List<Uri>, permanent: Boolean ->
+        { uris: List<Uri>, action: FileAction ->
             val media = uris.filter { it.authority == MediaStore.AUTHORITY }
             if (media.isEmpty()) {
                 false
             } else {
                 if (Build.VERSION.SDK_INT >= 30) {
                     pending = media
-                    val sender = if (permanent) {
-                        MediaStore.createDeleteRequest(context.contentResolver, media).intentSender
-                    } else {
-                        MediaStore.createTrashRequest(context.contentResolver, media, true).intentSender
+                    val sender = when (action) {
+                        FileAction.DELETE -> MediaStore.createDeleteRequest(context.contentResolver, media).intentSender
+                        FileAction.TRASH -> MediaStore.createTrashRequest(context.contentResolver, media, true).intentSender
+                        FileAction.RESTORE -> MediaStore.createTrashRequest(context.contentResolver, media, false).intentSender
                     }
                     launcher.launch(IntentSenderRequest.Builder(sender).build())
                 } else {
                     var ok = true
-                    for (u in media) {
-                        try {
-                            context.contentResolver.delete(u, null, null)
-                        } catch (e: Exception) {
-                            ok = false
+                    if (action != FileAction.RESTORE) {
+                        for (u in media) {
+                            try {
+                                context.contentResolver.delete(u, null, null)
+                            } catch (e: Exception) {
+                                ok = false
+                            }
                         }
                     }
                     callback(media, ok)
                 }
                 true
             }
+        }
+    }
+}
+
+/** Atajo: papelera o eliminación definitiva. */
+@Composable
+fun rememberFileRemover(onResult: (List<Uri>, Boolean) -> Unit): (List<Uri>, Boolean) -> Boolean {
+    val act = rememberFileAction(onResult)
+    return remember(act) {
+        { uris: List<Uri>, permanent: Boolean ->
+            act(uris, if (permanent) FileAction.DELETE else FileAction.TRASH)
         }
     }
 }
