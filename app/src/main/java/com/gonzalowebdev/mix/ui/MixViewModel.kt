@@ -53,7 +53,7 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
     private val repo = MediaRepository(app)
     private val dao = (app as MixApp).db.dao()
-    private val analysisDao = app.analysisDb.dao()
+    private val analysisDao = (app as MixApp).analysisDb.dao()
 
     // ---------- Biblioteca ----------
     var allMedia by mutableStateOf<List<MediaFile>>(emptyList())
