@@ -18,8 +18,8 @@ import androidx.compose.ui.unit.sp
 import com.gonzalowebdev.mix.R
 
 object MixColors {
-    val Black = Color(0xFF0B0B0D)
-    val Graphite = Color(0xFF1A1A1F)
+    val Black = Color(0xFF000000)
+    val Graphite = Color(0xFF121214)
     val Pink = Color(0xFFFF4F8B)
     val PinkSoft = Color(0xFFFFB3CF)
     val Bone = Color(0xFFF4EFF1)
@@ -50,14 +50,14 @@ private val MixDarkScheme = darkColorScheme(
     inverseOnSurface = MixColors.Black,
     error = Color(0xFFFF6B7A),
     onError = MixColors.Black,
-    outline = Color(0xFF4A4A52),
-    outlineVariant = Color(0xFF2A2A31),
+    outline = Color(0xFF3A3A41),
+    outlineVariant = Color(0xFF202025),
     scrim = Color.Black,
-    surfaceContainerLowest = Color(0xFF070708),
-    surfaceContainerLow = Color(0xFF101013),
-    surfaceContainer = Color(0xFF141417),
+    surfaceContainerLowest = Color(0xFF000000),
+    surfaceContainerLow = Color(0xFF070708),
+    surfaceContainer = Color(0xFF0B0B0D),
     surfaceContainerHigh = MixColors.Graphite,
-    surfaceContainerHighest = Color(0xFF222228)
+    surfaceContainerHighest = Color(0xFF1A1A1E)
 )
 
 @OptIn(ExperimentalTextApi::class)

@@ -72,26 +72,15 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("ambient", false)
         set(v) = sp.edit().putBoolean("ambient", v).apply()
 
-    var hiddenMemories: Set<String>
-        get() = (sp.getStringSet("hiddenMemories", emptySet()) ?: emptySet()).toSet()
-        set(v) = sp.edit().putStringSet("hiddenMemories", v).apply()
+    /** Nombre para el saludo de Recuerdos. */
+    var userName: String
+        get() = sp.getString("userName", "Gonza") ?: "Gonza"
+        set(v) = sp.edit().putString("userName", v).apply()
 
-    var pinnedMemories: Set<String>
-        get() = (sp.getStringSet("pinnedMemories", emptySet()) ?: emptySet()).toSet()
-        set(v) = sp.edit().putStringSet("pinnedMemories", v).apply()
-
-    /** Día en que se generaron los recuerdos y qué ids se mostraron hoy / ayer. */
-    var memDay: String
-        get() = sp.getString("memDay", "") ?: ""
-        set(v) = sp.edit().putString("memDay", v).apply()
-
-    var memIds: Set<String>
-        get() = (sp.getStringSet("memIds", emptySet()) ?: emptySet()).toSet()
-        set(v) = sp.edit().putStringSet("memIds", v).apply()
-
-    var memPrev: Set<String>
-        get() = (sp.getStringSet("memPrev", emptySet()) ?: emptySet()).toSet()
-        set(v) = sp.edit().putStringSet("memPrev", v).apply()
+    /** Últimos archivos reproducidos (el más reciente primero). */
+    var recentPlayed: List<String>
+        get() = (sp.getString("recentPlayed", "") ?: "").split("\n").filter { it.isNotBlank() }
+        set(v) = sp.edit().putString("recentPlayed", v.joinToString("\n")).apply()
 
     var recentSearches: List<String>
         get() = (sp.getString("recentSearches", "") ?: "").split("\n").filter { it.isNotBlank() }

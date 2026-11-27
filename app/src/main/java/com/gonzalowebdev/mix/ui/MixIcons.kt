@@ -37,6 +37,53 @@ object MixIcons {
             line("M13.6 14.6L16 17L18.4 14.6", width = 2.6f)
         }
     }
+    val ArrowUp: ImageVector by lazy { icon("ArrowUp") { line("M12 19V5M6 11L12 5L18 11", width = 2.2f) } }
+    val Sun: ImageVector by lazy {
+        icon("Sun") {
+            line(circle(12f, 12f, 4f))
+            line("M12 3V5M12 19V21M3 12H5M19 12H21M5.6 5.6L7 7M17 17L18.4 18.4M5.6 18.4L7 17M17 7L18.4 5.6")
+        }
+    }
+    val Layers: ImageVector by lazy {
+        icon("Layers") {
+            line("M12 4L20 8.5L12 13L4 8.5Z")
+            line("M4 12.5L12 17L20 12.5")
+            line("M4 16L12 20.5L20 16")
+        }
+    }
+    val Bolt: ImageVector by lazy { icon("Bolt") { line("M13 3L5 13.5H11L10 21L19 10H13Z") } }
+    val Dice: ImageVector by lazy {
+        icon("Dice") {
+            line(rr(4f, 4f, 16f, 16f, 4f))
+            line("M8.5 8.6V8.7M15.5 8.6V8.7M12 12V12.1M8.5 15.4V15.5M15.5 15.4V15.5", width = 2.6f)
+        }
+    }
+    val Image: ImageVector by lazy {
+        icon("Image") {
+            line(rr(3.5f, 5f, 17f, 14f, 3f))
+            line(circle(9f, 10f, 1.6f))
+            line("M4 17L9 12.5L13 16L15.5 14L20 18")
+        }
+    }
+    val Videocam: ImageVector by lazy {
+        icon("Videocam") {
+            line(rr(3.5f, 6.5f, 12f, 11f, 3f))
+            line("M15.5 11L20.5 8V16L15.5 13")
+        }
+    }
+    val History: ImageVector by lazy {
+        icon("History") {
+            line("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8")
+            line("M3 3v5h5")
+            line("M12 7v5l4 2")
+        }
+    }
+    val AddPhoto: ImageVector by lazy {
+        icon("AddPhoto") {
+            line(rr(3.5f, 5f, 17f, 14f, 3f))
+            line("M12 9V15M9 12H15")
+        }
+    }
     val Mosaic: ImageVector by lazy {
         icon("Mosaic") {
             line(rr(4f, 4f, 7f, 10f, 2f))

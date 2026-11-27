@@ -19,6 +19,7 @@ import com.gonzalowebdev.mix.data.MediaFile
 import com.gonzalowebdev.mix.data.MediaRepository
 import com.gonzalowebdev.mix.data.Memory
 import com.gonzalowebdev.mix.data.MemoryGenerator
+import com.gonzalowebdev.mix.data.MemoryKind
 import com.gonzalowebdev.mix.data.PlaylistEntity
 import com.gonzalowebdev.mix.data.PlaylistItemEntity
 import com.gonzalowebdev.mix.data.Prefs
@@ -27,18 +28,13 @@ import com.gonzalowebdev.mix.data.SmartList
 import com.gonzalowebdev.mix.data.SortField
 import com.gonzalowebdev.mix.data.TypeFilter
 import androidx.core.content.pm.PackageInfoCompat
-import com.gonzalowebdev.mix.data.MediaAnalysis
-import com.gonzalowebdev.mix.data.MediaAnalyzer
 import com.gonzalowebdev.mix.data.UpdateChecker
 import com.gonzalowebdev.mix.data.UpdateInfo
 import com.gonzalowebdev.mix.data.UpdateResult
 import com.gonzalowebdev.mix.data.VisualStyle
-import com.gonzalowebdev.mix.data.findDuplicateGroups
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.yield
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -53,7 +49,6 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
     private val repo = MediaRepository(app)
     private val dao = (app as MixApp).db.dao()
-    private val analysisDao = (app as MixApp).analysisDb.dao()
 
     // ---------- Biblioteca ----------
     var allMedia by mutableStateOf<List<MediaFile>>(emptyList())
@@ -196,6 +191,11 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         if (sortField != SortField.RANDOM && !sortAsc) sorted.asReversed() else sorted
     }
 
+    /** Claves de los videos del feed (los que pueden mostrar vista previa). */
+    val visibleVideoKeys: Set<String> by derivedStateOf {
+        visible.filter { it.isVideo }.map { it.key }.toHashSet()
+    }
+
     val selectedFiles: List<MediaFile> by derivedStateOf {
         val keys = selected.toSet()
         visible.filter { it.key in keys }
@@ -210,7 +210,6 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
                 allMedia = device + extras
                 if (folderFilter != null && folderFilter !in folders) folderFilter = null
                 loadedOnce = true
-                startAnalysis()
             } finally {
                 loading = false
             }
@@ -229,21 +228,31 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSelection() = selected.clear()
 
     // ---------- Recuerdos ----------
-    private val todayStr = LocalDate.now().toString()
-    private val avoidIds: Set<String> = if (prefs.memDay == todayStr) prefs.memPrev else prefs.memIds
-
-    var hiddenMemories by mutableStateOf(prefs.hiddenMemories)
+    var memories by mutableStateOf<List<Memory>>(emptyList())
         private set
-    var pinnedMemories by mutableStateOf(prefs.pinnedMemories)
-        private set
+    private var memJob: Job? = null
 
-    val memories: List<Memory> by derivedStateOf {
-        MemoryGenerator.generate(
-            scopedMedia, favorites, LocalDate.now(), analysis, avoidIds, hiddenMemories, pinnedMemories
-        )
+    /** Las pastillas se arman fuera del hilo principal, para no trabar el feed. */
+    fun rebuildMemories() {
+        val media = scopedMedia
+        val favs = favorites
+        val recent = prefs.recentPlayed
+        val today = LocalDate.now()
+        memJob?.cancel()
+        memJob = viewModelScope.launch(Dispatchers.Default) {
+            val list = MemoryGenerator.generate(media, favs, today, recent)
+            withContext(Dispatchers.Main) { memories = list }
+        }
     }
 
-    /** Presentación inicial ("Un día como hoy · hace 3 años") del recuerdo que se está reproduciendo. */
+    // Va después de scopedMedia y favorites: el flow los lee apenas arranca
+    init {
+        viewModelScope.launch {
+            snapshotFlow { scopedMedia to favorites }.collect { rebuildMemories() }
+        }
+    }
+
+    /** Presentación inicial (título y subtítulo) de la lista que se está reproduciendo. */
     var memoryIntro by mutableStateOf<Memory?>(null)
         private set
 
@@ -254,114 +263,18 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun playMemory(memory: Memory) {
-        playQueue(memory.files.map { it.toQueueItem() }, 0)
-        memoryIntro = memory
-    }
-
-    /** Guarda qué recuerdos se mostraron hoy, para no repetirlos mañana. */
-    fun recordMemoriesShown() {
-        val ids = memories.map { it.id }.toSet()
-        if (ids.isEmpty()) return
-        if (prefs.memDay != todayStr) {
-            prefs.memPrev = prefs.memIds
-            prefs.memDay = todayStr
+        val m = if (memory.kind == MemoryKind.LUCKY) {
+            MemoryGenerator.lucky(scopedMedia, favorites) ?: memory
+        } else {
+            memory
         }
-        prefs.memIds = ids
+        playQueue(m.files.map { it.toQueueItem() }, 0)
+        memoryIntro = m
     }
 
-    fun hideMemory(id: String) {
-        hiddenMemories = hiddenMemories + id
-        pinnedMemories = pinnedMemories - id
-        prefs.hiddenMemories = hiddenMemories
-        prefs.pinnedMemories = pinnedMemories
-    }
-
-    fun togglePinMemory(id: String) {
-        pinnedMemories = if (id in pinnedMemories) pinnedMemories - id else pinnedMemories + id
-        prefs.pinnedMemories = pinnedMemories
-    }
-
-    fun unhideAllMemories() {
-        hiddenMemories = emptySet()
-        prefs.hiddenMemories = hiddenMemories
-    }
-
-    // ---------- Análisis de imágenes (nitidez y duplicados), sin IA ----------
-    var analysis by mutableStateOf<Map<String, MediaAnalysis>>(emptyMap())
-        private set
-    var analyzing by mutableStateOf(false)
-        private set
-    var analysisDone by mutableIntStateOf(0)
-        private set
-    var analysisTotal by mutableIntStateOf(0)
-        private set
-    var duplicateGroups by mutableStateOf<List<List<MediaFile>>>(emptyList())
-        private set
-    private var analysisJob: Job? = null
-
-    fun startAnalysis() {
-        if (analysisJob?.isActive == true) return
-        analysisJob = viewModelScope.launch(Dispatchers.Default) {
-            withContext(Dispatchers.Main) { analyzing = true }
-            val known = analysisDao.all().associateBy { it.uri }.toMutableMap()
-            val images = withContext(Dispatchers.Main) { allMedia.filter { !it.isVideo } }
-            val todo = images.filter { it.key !in known }
-            val first = known.toMap()
-            withContext(Dispatchers.Main) {
-                analysis = first
-                analysisTotal = todo.size
-                analysisDone = 0
-            }
-            val batch = ArrayList<MediaAnalysis>()
-            var sinceUi = 0
-            for ((i, f) in todo.withIndex()) {
-                ensureActive()
-                val a = MediaAnalyzer.analyze(getApplication(), f)
-                if (a != null) {
-                    batch += a
-                    known[a.uri] = a
-                }
-                sinceUi++
-                if (batch.size >= 50) {
-                    analysisDao.insertAll(batch.toList())
-                    batch.clear()
-                }
-                if (sinceUi >= 300) {
-                    sinceUi = 0
-                    val snap = known.toMap()
-                    withContext(Dispatchers.Main) {
-                        analysis = snap
-                        analysisDone = i + 1
-                    }
-                }
-                yield()
-            }
-            if (batch.isNotEmpty()) analysisDao.insertAll(batch.toList())
-            val snap = known.toMap()
-            withContext(Dispatchers.Main) {
-                analysis = snap
-                analysisDone = todo.size
-                analyzing = false
-            }
-            val media = withContext(Dispatchers.Main) { allMedia }
-            val favs = withContext(Dispatchers.Main) { favorites }
-            val groups = findDuplicateGroups(media, snap, favs)
-            withContext(Dispatchers.Main) { duplicateGroups = groups }
-        }
-    }
-
-    // ---------- Limpieza ----------
-    val screenshots: List<MediaFile> by derivedStateOf {
-        allMedia.filter { it.isScreenshot }.sortedByDescending { it.size }
-    }
-    val blurry: List<MediaFile> by derivedStateOf {
-        allMedia.filter {
-            !it.isVideo && !it.isScreenshot && it.key !in favorites &&
-                (analysis[it.key]?.sharp ?: Float.MAX_VALUE) < MemoryGenerator.BLUR_THRESHOLD
-        }.sortedBy { analysis[it.key]?.sharp ?: 0f }
-    }
-    val heavyVideos: List<MediaFile> by derivedStateOf {
-        allMedia.filter { it.isVideo && it.size >= 100L * 1024 * 1024 }.sortedByDescending { it.size }
+    /** Guarda el archivo como reproducido hace un momento (para "Últimas reproducidas"). */
+    fun markPlayed(uri: String) {
+        prefs.recentPlayed = (listOf(uri) + prefs.recentPlayed.filter { it != uri }).take(60)
     }
 
     // ---------- Papelera ----------
@@ -531,8 +444,6 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         }
         queue = queue.filter { it.uri !in keys }
         keys.forEach { prefs.clearPosition(it) }
-        duplicateGroups = duplicateGroups.map { g -> g.filter { it.key !in keys } }.filter { it.size >= 2 }
-        viewModelScope.launch { keys.toList().chunked(500).forEach { analysisDao.delete(it) } }
         viewModelScope.launch {
             keys.toList().chunked(500).forEach { dao.deleteItemsByUri(it) }
         }
@@ -817,8 +728,6 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         mosaic = prefs.mosaic
         smartLists = loadSmart()
         styles = loadStyles()
-        hiddenMemories = prefs.hiddenMemories
-        pinnedMemories = prefs.pinnedMemories
         recentSearches = prefs.recentSearches
         useAllFolders = prefs.useAllFolders
         selectedFolders = prefs.selectedFolders

@@ -95,7 +95,6 @@ fun MixRoot(
                         vm = vm,
                         onPlay = { nav.navigate("player") },
                         onFolders = { goTab(nav, "folders") },
-                        onCleanup = { nav.navigate("cleanup") },
                         onTrash = { nav.navigate("trash") },
                         onSettings = { nav.navigate("settings") }
                     )
@@ -104,12 +103,8 @@ fun MixRoot(
                     SettingsScreen(
                         vm = vm,
                         onBack = { nav.popBackStack() },
-                        onCleanup = { nav.navigate("cleanup") },
                         onTrash = { nav.navigate("trash") }
                     )
-                }
-                composable("cleanup") {
-                    CleanupScreen(vm = vm, onBack = { nav.popBackStack() })
                 }
                 composable("trash") {
                     TrashScreen(vm = vm, onBack = { nav.popBackStack() })
@@ -187,7 +182,7 @@ private fun FloatingNav(tabs: List<Tab>, current: String?, onSelect: (Tab) -> Un
         Row(
             Modifier
                 .clip(shape)
-                .background(Color(0xF2141417))
+                .background(Color(0xF20A0A0C))
                 .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
                 .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),

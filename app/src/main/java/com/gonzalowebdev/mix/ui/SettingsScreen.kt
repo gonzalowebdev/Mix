@@ -38,7 +38,6 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     vm: MixViewModel,
     onBack: () -> Unit,
-    onCleanup: () -> Unit,
     onTrash: () -> Unit
 ) {
     val context = LocalContext.current
@@ -115,30 +114,10 @@ fun SettingsScreen(
 
             SettingsHeader("Biblioteca")
             ListItem(
-                headlineContent = { Text("Limpieza") },
-                supportingContent = { Text("Duplicados, capturas, fotos borrosas y videos pesados") },
-                leadingContent = { Icon(MixIcons.Delete, contentDescription = null) },
-                modifier = Modifier.clickable(onClick = onCleanup)
-            )
-            ListItem(
                 headlineContent = { Text("Papelera") },
                 supportingContent = { Text("Restaurar o eliminar definitivamente") },
                 leadingContent = { Icon(MixIcons.Folder, contentDescription = null) },
                 modifier = Modifier.clickable(onClick = onTrash)
-            )
-            ListItem(
-                headlineContent = { Text("Recuerdos ocultos") },
-                supportingContent = {
-                    Text(
-                        if (vm.hiddenMemories.isEmpty()) "No ocultaste ninguno"
-                        else "${vm.hiddenMemories.size} ocultos · tocá para volver a mostrarlos"
-                    )
-                },
-                leadingContent = { Icon(MixIcons.AutoAwesome, contentDescription = null) },
-                modifier = Modifier.clickable(enabled = vm.hiddenMemories.isNotEmpty()) {
-                    vm.unhideAllMemories()
-                    scope.launch { snackbar.showSnackbar("Se vuelven a mostrar los recuerdos") }
-                }
             )
 
             SettingsHeader("Respaldo")

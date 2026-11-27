@@ -87,7 +87,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.runtime.CompositionLocalProvider
+import com.gonzalowebdev.mix.data.MediaThumb
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -292,11 +295,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     // Dos reproductores: uno reproduce y el otro precarga el siguiente video
     val players = remember {
         List(2) {
-            ExoPlayer.Builder(context)
-                .setAudioAttributes(AudioAttributes.DEFAULT, !prefs.muted)
-                .setHandleAudioBecomingNoisy(true)
-                .setWakeMode(C.WAKE_MODE_LOCAL)
-                .build()
+            newExoPlayer(context, handleAudioFocus = !prefs.muted)
         }
     }
     val slotUri = remember { mutableStateListOf("", "") }
@@ -579,8 +578,10 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
     // Cambio de página (como TikTok): guarda la posición anterior, activa la nueva y precarga
     LaunchedEffect(Unit) {
         activate(pagerState.settledPage, false, true)
+        vm.markPlayed(itemAt(pagerState.settledPage).uri)
         snapshotFlow { pagerState.settledPage }.collect { page ->
             if (page != lastSettled) {
+                vm.markPlayed(itemAt(page).uri)
                 val prevSlot = slotUri.indexOf(itemAt(lastSettled).uri)
                 if (prevSlot >= 0) savePosition(lastSettled, prevSlot)
                 val forward = page >= lastSettled
@@ -843,9 +844,8 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     } else {
                         val thumb = remember(pageItem.uri) {
                             ImageRequest.Builder(context)
-                                .data(Uri.parse(pageItem.uri))
+                                .data(MediaThumb(Uri.parse(pageItem.uri), true))
                                 .size(1080)
-                                .videoFramePercent(0.1)
                                 .build()
                         }
                         AsyncImage(
@@ -1254,7 +1254,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     .windowInsetsPadding(bottomInsets)
                     .padding(horizontal = 14.dp, vertical = 12.dp)
                     .clip(glass)
-                    .background(Color(0xB30B0B0D))
+                    .background(Color(0xB3000000))
                     .border(0.5.dp, Color(0x22FFFFFF), glass)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
@@ -1404,7 +1404,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                     .fillMaxWidth()
                     .heightIn(max = panelMax)
                     .clip(panelShape)
-                    .background(Color(0xF2141417))
+                    .background(Color(0xF2070708))
                     .border(0.5.dp, Color(0x22FFFFFF), panelShape)
                     .windowInsetsPadding(bottomInsets)
             ) {
@@ -1415,6 +1415,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         .size(width = 36.dp, height = 4.dp)
                         .background(Color(0x44FFFFFF), RoundedCornerShape(2.dp))
                 )
+                CompositionLocalProvider(LocalContentColor provides MixColors.Bone) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -1447,9 +1448,8 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         0 -> {
                             val previewRequest = remember(item.uri) {
                                 ImageRequest.Builder(context)
-                                    .data(Uri.parse(item.uri))
+                                    .data(MediaThumb(Uri.parse(item.uri), item.isVideo))
                                     .size(200)
-                                    .apply { if (item.isVideo) videoFramePercent(0.1) }
                                     .build()
                             }
                             Text("Tocá un filtro: se aplica en vivo", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1632,6 +1632,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
                         }
                     }
                 }
+                }
             }
         }
 
@@ -1719,7 +1720,7 @@ fun PlayerScreen(vm: MixViewModel, onClose: () -> Unit) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0xE60B0B0D))
+                    .background(Color(0xE6000000))
                     .clickable {
                         showTips = false
                         prefs.tipsSeen = true

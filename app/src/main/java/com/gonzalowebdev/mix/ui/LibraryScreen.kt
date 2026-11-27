@@ -1,6 +1,31 @@
 package com.gonzalowebdev.mix.ui
 
 import android.Manifest
+import android.view.LayoutInflater
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
+import com.gonzalowebdev.mix.R
+import com.gonzalowebdev.mix.data.MediaThumb
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -134,7 +159,6 @@ fun LibraryScreen(
     vm: MixViewModel,
     onPlay: () -> Unit,
     onFolders: () -> Unit,
-    onCleanup: () -> Unit,
     onTrash: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -341,13 +365,6 @@ fun LibraryScreen(
                                         onClick = {
                                             topMenu = false
                                             addFilesLauncher.launch(arrayOf("image/*", "video/*"))
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Limpieza") },
-                                        onClick = {
-                                            topMenu = false
-                                            onCleanup()
                                         }
                                     )
                                     DropdownMenuItem(
@@ -634,6 +651,48 @@ private fun aspectFor(file: MediaFile, mosaic: Boolean): Float {
     return if (r in 0.85f..1.25f) variety else r
 }
 
+/** Elige el video del feed que más se ve, para reproducir su vista previa (como Pinterest). */
+private fun pickPreview(
+    vm: MixViewModel,
+    staggered: LazyStaggeredGridState,
+    grid: LazyGridState
+): String? {
+    val videos = vm.visibleVideoKeys
+    if (videos.isEmpty()) return null
+    val viewportHeight: Int
+    val spans = ArrayList<Triple<String, Int, Int>>()
+    if (vm.mosaic) {
+        val info = staggered.layoutInfo
+        viewportHeight = info.viewportSize.height
+        for (it in info.visibleItemsInfo) {
+            val k = it.key as? String ?: continue
+            if (k in videos) spans += Triple(k, it.offset.y, it.offset.y + it.size.height)
+        }
+    } else {
+        val info = grid.layoutInfo
+        viewportHeight = info.viewportSize.height
+        for (it in info.visibleItemsInfo) {
+            val k = it.key as? String ?: continue
+            if (k in videos) spans += Triple(k, it.offset.y, it.offset.y + it.size.height)
+        }
+    }
+    val center = viewportHeight / 2f
+    var best: String? = null
+    var bestScore = Float.MAX_VALUE
+    for ((k, top, bottom) in spans) {
+        val h = (bottom - top).coerceAtLeast(1)
+        val shown = minOf(bottom, viewportHeight) - maxOf(top, 0)
+        if (shown.toFloat() / h < 0.75f) continue
+        val score = abs((top + bottom) / 2f - center)
+        if (score < bestScore) {
+            bestScore = score
+            best = k
+        }
+    }
+    return best
+}
+
+@OptIn(FlowPreview::class)
 @Composable
 private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
     val selectedKeys = vm.selected
@@ -641,11 +700,78 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
     val favorites = vm.favorites
     val inset = LocalNavInset.current
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val memories = vm.memories
     val showMemories = memories.isNotEmpty() && vm.query.isBlank() && vm.typeFilter == TypeFilter.ALL &&
         vm.folderFilter == null && !vm.favoritesOnly
     val staggeredState = rememberLazyStaggeredGridState()
     val gridState = rememberLazyGridState()
+
+    // ---- Vista previa de videos en el feed: un solo reproductor, mudo y en bucle ----
+    val preview = remember {
+        newExoPlayer(context, handleAudioFocus = false, preview = true).apply {
+            volume = 0f
+            repeatMode = Player.REPEAT_MODE_ONE
+        }
+    }
+    var previewKey by remember { mutableStateOf<String?>(null) }
+    var previewReady by remember { mutableStateOf(false) }
+    DisposableEffect(preview) {
+        val l = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                previewReady = true
+            }
+        }
+        preview.addListener(l)
+        onDispose {
+            preview.removeListener(l)
+            preview.release()
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                previewKey = null
+                previewReady = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    LaunchedEffect(selecting) {
+        snapshotFlow { if (selecting) null else pickPreview(vm, staggeredState, gridState) }
+            .distinctUntilChanged()
+            .debounce(450)
+            .collect {
+                previewReady = false
+                previewKey = it
+            }
+    }
+    LaunchedEffect(previewKey) {
+        val key = previewKey
+        if (key == null) {
+            preview.stop()
+            preview.clearMediaItems()
+        } else {
+            val dur = vm.mediaFor(key)?.durationMs ?: 0L
+            val item = MediaItem.Builder().setUri(key).apply {
+                if (dur > 9_000L) {
+                    setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(8_000L).build())
+                }
+            }.build()
+            preview.setMediaItem(item)
+            preview.prepare()
+            preview.playWhenReady = true
+        }
+    }
+
+    val showTop by remember {
+        derivedStateOf {
+            if (vm.mosaic) staggeredState.firstVisibleItemIndex > 8 else gridState.firstVisibleItemIndex > 12
+        }
+    }
 
     val dragMod = Modifier.dragSelect(
         keyAt = { pos ->
@@ -669,68 +795,105 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
         onEnter = { key, add -> vm.dragSelectEnter(key, add) }
     )
 
-    if (vm.mosaic) {
-        LazyVerticalStaggeredGrid(
-            state = staggeredState,
-            columns = StaggeredGridCells.Adaptive(150.dp),
-            contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp + inset),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalItemSpacing = 6.dp,
-            modifier = Modifier.fillMaxSize().then(dragMod)
-        ) {
-            if (showMemories) {
-                item(key = "memories", span = StaggeredGridItemSpan.FullLine) {
-                    MemoriesRow(vm, memories, onPlay)
+    Box(Modifier.fillMaxSize()) {
+        if (vm.mosaic) {
+            LazyVerticalStaggeredGrid(
+                state = staggeredState,
+                columns = StaggeredGridCells.Adaptive(150.dp),
+                contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp + inset),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalItemSpacing = 6.dp,
+                modifier = Modifier.fillMaxSize().then(dragMod)
+            ) {
+                if (showMemories) {
+                    item(key = "memories", span = StaggeredGridItemSpan.FullLine) {
+                        MemoryPills(vm, memories, onPlay)
+                    }
+                }
+                items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
+                    MediaCell(
+                        file = file,
+                        aspect = aspectFor(file, true),
+                        selected = file.key in selectedKeys,
+                        selecting = selecting,
+                        favorite = file.key in favorites,
+                        previewPlayer = if (file.key == previewKey) preview else null,
+                        previewReady = previewReady,
+                        onClick = {
+                            if (selecting) {
+                                vm.toggleSelect(file)
+                            } else {
+                                vm.playFromLibrary(file)
+                                onPlay()
+                            }
+                        }
+                    )
                 }
             }
-            items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
-                MediaCell(
-                    file = file,
-                    aspect = aspectFor(file, true),
-                    selected = file.key in selectedKeys,
-                    selecting = selecting,
-                    favorite = file.key in favorites,
-                    onClick = {
-                        if (selecting) {
-                            vm.toggleSelect(file)
-                        } else {
-                            vm.playFromLibrary(file)
-                            onPlay()
-                        }
+        } else {
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Adaptive(104.dp),
+                contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp + inset),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxSize().then(dragMod)
+            ) {
+                if (showMemories) {
+                    item(key = "memories", span = { GridItemSpan(maxLineSpan) }) {
+                        MemoryPills(vm, memories, onPlay)
                     }
-                )
+                }
+                items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
+                    MediaCell(
+                        file = file,
+                        aspect = 1f,
+                        selected = file.key in selectedKeys,
+                        selecting = selecting,
+                        favorite = file.key in favorites,
+                        previewPlayer = if (file.key == previewKey) preview else null,
+                        previewReady = previewReady,
+                        onClick = {
+                            if (selecting) {
+                                vm.toggleSelect(file)
+                            } else {
+                                vm.playFromLibrary(file)
+                                onPlay()
+                            }
+                        }
+                    )
+                }
             }
         }
-    } else {
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Adaptive(104.dp),
-            contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 4.dp + inset),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxSize().then(dragMod)
+
+        // Volver arriba
+        AnimatedVisibility(
+            visible = showTop,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = inset + 14.dp),
+            enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.8f),
+            exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.8f)
         ) {
-            if (showMemories) {
-                item(key = "memories", span = { GridItemSpan(maxLineSpan) }) {
-                    MemoriesRow(vm, memories, onPlay)
-                }
-            }
-            items(vm.visible, key = { it.key }, contentType = { it.isVideo }) { file ->
-                MediaCell(
-                    file = file,
-                    aspect = 1f,
-                    selected = file.key in selectedKeys,
-                    selecting = selecting,
-                    favorite = file.key in favorites,
-                    onClick = {
-                        if (selecting) {
-                            vm.toggleSelect(file)
-                        } else {
-                            vm.playFromLibrary(file)
-                            onPlay()
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xF20A0A0C))
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        scope.launch {
+                            if (vm.mosaic) {
+                                if (staggeredState.firstVisibleItemIndex > 40) staggeredState.scrollToItem(30)
+                                staggeredState.animateScrollToItem(0)
+                            } else {
+                                if (gridState.firstVisibleItemIndex > 40) gridState.scrollToItem(30)
+                                gridState.animateScrollToItem(0)
+                            }
                         }
-                    }
-                )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(MixIcons.ArrowUp, contentDescription = "Volver arriba", tint = MixColors.Pink, modifier = Modifier.size(22.dp))
             }
         }
     }
@@ -787,19 +950,19 @@ private fun MediaCell(
     selected: Boolean,
     selecting: Boolean,
     favorite: Boolean,
+    previewPlayer: Player?,
+    previewReady: Boolean,
     onClick: () -> Unit
 ) {
     val isSelected = selected
     val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(if (pressed) 0.96f else 1f, tween(120), label = "press")
     val request = remember(file.key) {
         ImageRequest.Builder(context)
-            .data(file.uri)
+            .data(MediaThumb(file.uri, file.isVideo))
             .size(400)
-            .apply { if (file.isVideo) videoFramePercent(0.1) }
             .build()
     }
     Box(
@@ -829,6 +992,15 @@ private fun MediaCell(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+        if (previewPlayer != null) {
+            val alpha by animateFloatAsState(if (previewReady) 1f else 0f, tween(220), label = "previewAlpha")
+            AndroidView(
+                factory = { c -> LayoutInflater.from(c).inflate(R.layout.preview_view, null) as PlayerView },
+                update = { it.player = previewPlayer },
+                onRelease = { it.player = null },
+                modifier = Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }
+            )
+        }
         if (file.isVideo) {
             Row(
                 Modifier
@@ -865,31 +1037,6 @@ private fun MediaCell(
                 tint = Color.White,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
             )
-        }
-    }
-}
-
-@Composable
-private fun MemoriesRow(vm: MixViewModel, memories: List<Memory>, onPlay: () -> Unit) {
-    LaunchedEffect(memories.map { it.id }) { vm.recordMemoriesShown() }
-    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-        Text(
-            "Recuerdos",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 6.dp, top = 4.dp, bottom = 10.dp)
-        )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(memories.take(10), key = { it.id }) { m ->
-                MemoryCard(
-                    memory = m,
-                    compact = true,
-                    modifier = Modifier.width(132.dp).height(176.dp),
-                    onClick = {
-                        vm.playMemory(m)
-                        onPlay()
-                    }
-                )
-            }
         }
     }
 }
