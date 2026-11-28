@@ -37,10 +37,11 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFramePercent
 import com.gonzalowebdev.mix.data.FolderInfo
+import com.gonzalowebdev.mix.data.MediaThumb
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FoldersScreen(vm: MixViewModel) {
+fun FolderScopeScreen(vm: MixViewModel, onBack: () -> Unit) {
     val folders = vm.allFolders
     val useAll = vm.useAllFolders
     val selected = vm.selectedFolders
@@ -49,7 +50,10 @@ fun FoldersScreen(vm: MixViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Carpetas", style = MaterialTheme.typography.headlineSmall) },
+                title = { Text("Carpetas del feed", style = MaterialTheme.typography.headlineSmall) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(MixIcons.ArrowBack, contentDescription = "Volver") }
+                },
                 actions = {
                     if (!useAll) {
                         Box {
@@ -122,9 +126,8 @@ private fun FolderThumb(f: FolderInfo) {
     val context = LocalContext.current
     val request = remember(f.sample.key) {
         ImageRequest.Builder(context)
-            .data(f.sample.uri)
+            .data(MediaThumb(f.sample.uri, f.sample.isVideo))
             .size(160)
-            .apply { if (f.sample.isVideo) videoFramePercent(0.1) }
             .build()
     }
     AsyncImage(

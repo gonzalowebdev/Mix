@@ -767,9 +767,16 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
         }
     }
 
-    val showTop by remember {
-        derivedStateOf {
-            if (vm.mosaic) staggeredState.firstVisibleItemIndex > 8 else gridState.firstVisibleItemIndex > 12
+    // El botón Inicio de la barra sube al principio cuando ya estás en el feed
+    LaunchedEffect(vm.scrollTopTick) {
+        if (vm.scrollTopTick > 0) {
+            if (vm.mosaic) {
+                if (staggeredState.firstVisibleItemIndex > 40) staggeredState.scrollToItem(30)
+                staggeredState.animateScrollToItem(0)
+            } else {
+                if (gridState.firstVisibleItemIndex > 40) gridState.scrollToItem(30)
+                gridState.animateScrollToItem(0)
+            }
         }
     }
 
@@ -863,37 +870,6 @@ private fun MediaGrid(vm: MixViewModel, onPlay: () -> Unit) {
                         }
                     )
                 }
-            }
-        }
-
-        // Volver arriba
-        AnimatedVisibility(
-            visible = showTop,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = inset + 14.dp),
-            enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.8f),
-            exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.8f)
-        ) {
-            Box(
-                Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xF20A0A0C))
-                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        scope.launch {
-                            if (vm.mosaic) {
-                                if (staggeredState.firstVisibleItemIndex > 40) staggeredState.scrollToItem(30)
-                                staggeredState.animateScrollToItem(0)
-                            } else {
-                                if (gridState.firstVisibleItemIndex > 40) gridState.scrollToItem(30)
-                                gridState.animateScrollToItem(0)
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(MixIcons.ArrowUp, contentDescription = "Volver arriba", tint = MixColors.Pink, modifier = Modifier.size(22.dp))
             }
         }
     }

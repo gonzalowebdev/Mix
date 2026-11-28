@@ -90,7 +90,7 @@ fun MemoryPill(memory: Memory, onClick: () -> Unit) {
             .background(if (round) pink.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant)
             .border(if (round) 1.5.dp else 0.5.dp, if (round) pink else MaterialTheme.colorScheme.outlineVariant, shape)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .then(if (round) Modifier.size(52.dp) else Modifier.height(46.dp).padding(horizontal = 16.dp)),
+            .then(if (round) Modifier.size(46.dp) else Modifier.height(46.dp).padding(horizontal = 16.dp)),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -98,7 +98,7 @@ fun MemoryPill(memory: Memory, onClick: () -> Unit) {
             imageVector = iconFor(memory),
             contentDescription = if (round) memory.title else null,
             tint = pink,
-            modifier = Modifier.size(if (round) 30.dp else 20.dp)
+            modifier = Modifier.size(if (round) 26.dp else 20.dp)
         )
         if (!round) {
             Text(
@@ -131,58 +131,6 @@ fun MemoryPills(vm: MixViewModel, memories: List<Memory>, onPlay: () -> Unit) {
                 MemoryPill(m) {
                     vm.playMemory(m)
                     onPlay()
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-fun MemoriesScreen(vm: MixViewModel, onPlay: () -> Unit) {
-    val inset = LocalNavInset.current
-    val memories = vm.memories
-
-    LaunchedEffect(Unit) { vm.rebuildMemories() }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text(greeting(vm.prefs.userName), style = MaterialTheme.typography.headlineSmall) })
-        }
-    ) { padding ->
-        if (memories.isEmpty()) {
-            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Todavía no hay recuerdos.\nAparecen cuando Mix encuentre fotos y videos en tu biblioteca.",
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(32.dp)
-                )
-            }
-        } else {
-            Column(
-                Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = inset + 16.dp)
-            ) {
-                Text(
-                    "Tocá una pastilla y se reproduce.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    memories.forEach { m ->
-                        MemoryPill(m) {
-                            vm.playMemory(m)
-                            onPlay()
-                        }
-                    }
                 }
             }
         }

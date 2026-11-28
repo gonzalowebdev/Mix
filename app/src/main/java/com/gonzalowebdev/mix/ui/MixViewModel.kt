@@ -107,6 +107,9 @@ class MixViewModel(app: Application) : AndroidViewModel(app) {
         randomSeed = System.nanoTime()
     }
 
+    /** Se incrementa para pedirle al feed que suba al principio. */
+    var scrollTopTick by mutableIntStateOf(0)
+
     val selected = mutableStateListOf<String>()
 
     var favorites by mutableStateOf(prefs.favorites)

@@ -64,7 +64,6 @@ fun MixRoot(
     val tabs = remember {
         listOf(
             Tab("library", "Inicio", MixIcons.Mosaic),
-            Tab("memories", "Recuerdos", MixIcons.AutoAwesome),
             Tab("playlists", "Listas", MixIcons.QueueMusic),
             Tab("folders", "Carpetas", MixIcons.Folder)
         )
@@ -94,7 +93,7 @@ fun MixRoot(
                     LibraryScreen(
                         vm = vm,
                         onPlay = { nav.navigate("player") },
-                        onFolders = { goTab(nav, "folders") },
+                        onFolders = { nav.navigate("folderScope") },
                         onTrash = { nav.navigate("trash") },
                         onSettings = { nav.navigate("settings") }
                     )
@@ -109,9 +108,6 @@ fun MixRoot(
                 composable("trash") {
                     TrashScreen(vm = vm, onBack = { nav.popBackStack() })
                 }
-                composable("memories") {
-                    MemoriesScreen(vm = vm, onPlay = { nav.navigate("player") })
-                }
                 composable("playlists") {
                     PlaylistsScreen(
                         vm = vm,
@@ -120,7 +116,21 @@ fun MixRoot(
                     )
                 }
                 composable("folders") {
-                    FoldersScreen(vm = vm)
+                    FolderBrowserScreen(vm = vm, onOpen = { id -> nav.navigate("folder/" + Uri.encode(id)) })
+                }
+                composable("folderScope") {
+                    FolderScopeScreen(vm = vm, onBack = { nav.popBackStack() })
+                }
+                composable(
+                    route = "folder/{id}",
+                    arguments = listOf(navArgument("id") { type = NavType.StringType })
+                ) { e ->
+                    FolderDetailScreen(
+                        vm = vm,
+                        folderId = e.arguments?.getString("id") ?: "",
+                        onBack = { nav.popBackStack() },
+                        onPlay = { nav.navigate("player") }
+                    )
                 }
                 composable(
                     route = "playlist/{id}",
@@ -152,7 +162,11 @@ fun MixRoot(
             exit = slideOutVertically(tween(160)) { it } + fadeOut(tween(160))
         ) {
             FloatingNav(tabs = tabs, current = route) { tab ->
-                if (tab.route == "library") vm.closeSearch()
+                if (tab.route == "library") {
+                    vm.closeSearch()
+                    // Inicio: si ya estás en el feed, sube al principio
+                    if (route == "library") vm.scrollTopTick++
+                }
                 goTab(nav, tab.route)
             }
         }
